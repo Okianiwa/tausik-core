@@ -15,7 +15,7 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stdin, "reconfigure"):
     sys.stdin.reconfigure(encoding="utf-8")
 
-CODE_EXTS = {".php", ".js", ".ts", ".tsx", ".jsx", ".py"}
+CODE_EXTS = {".php", ".js", ".ts", ".tsx", ".jsx", ".py", ".css", ".scss"}
 
 ALLOWED_KEYWORDS = (
     "SECURITY:",
