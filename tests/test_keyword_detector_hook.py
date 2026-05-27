@@ -199,6 +199,36 @@ class TestSearchIntentNudge:
         assert result.returncode == 0
         assert result.stdout.strip() == ""
 
+    def test_quoted_search_keyword_example_does_not_trigger(self, tmp_path):
+        """Self-referential FP: skill docs / hook output examples cite
+        'where is X used' as a literal — strip quoted spans before matching."""
+        _setup_tausik(tmp_path, active=False)
+        transcript = _make_transcript(
+            tmp_path,
+            assistant_text="Anything else?",
+            user_text="что значит nudge про 'where is X' / 'find Y'?",
+        )
+        result = _run(tmp_path, {"transcript_path": transcript})
+        assert result.returncode == 0
+        assert result.stdout.strip() == "", (
+            f"quoted example must not trigger nudge (stdout: {result.stdout!r})"
+        )
+
+    def test_real_intent_with_symbol_in_quotes_still_triggers(self, tmp_path):
+        """Regression: stripping quoted spans must not kill the real path —
+        'где определена `getUser`?' → strip leaves 'где определена  ?', still matches."""
+        _setup_tausik(tmp_path, active=False)
+        transcript = _make_transcript(
+            tmp_path,
+            assistant_text="Сейчас гляну.",
+            user_text="где определена `getUser`?",
+        )
+        result = _run(tmp_path, {"transcript_path": transcript})
+        assert result.returncode == 0
+        parsed = json.loads(result.stdout) if result.stdout.strip() else {}
+        assert parsed.get("decision") == "block"
+        assert "search_code" in parsed.get("reason", "")
+
     def test_drift_takes_precedence_over_search_nudge(self, tmp_path):
         """If both drift and search-intent fire, the drift block wins (more critical)."""
         _setup_tausik(tmp_path, active=False)

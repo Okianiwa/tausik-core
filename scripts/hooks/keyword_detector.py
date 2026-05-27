@@ -70,6 +70,12 @@ SEARCH_RECOMMENDATION = (
 )
 
 
+# Quoted/code spans usually carry citations or symbol names, not the user's own
+# intent. Stripping them before matching kills self-referential FPs where the
+# skill body or the user echoes the hook's own examples (e.g. 'where is X used').
+_QUOTED_SPAN = re.compile(r"'[^']*'|\"[^\"]*\"|`[^`]*`")
+
+
 def _extract_text(content) -> str:
     """Normalize assistant message content to plain text.
 
@@ -161,7 +167,7 @@ def _has_drift_keyword(text: str) -> bool:
 def _has_search_intent(text: str) -> bool:
     if not text:
         return False
-    lowered = text.lower()
+    lowered = _QUOTED_SPAN.sub(" ", text).lower()
     return any(re.search(pat, lowered) for pat in SEARCH_INTENT_KEYWORDS)
 
 
