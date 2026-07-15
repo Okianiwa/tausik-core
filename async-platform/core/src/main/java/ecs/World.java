@@ -21,6 +21,9 @@ public final class World {
     public final int[]    archLo;
     public final int[]    archHi;
 
+    // Scratch-приёмник диагностической busy-work. НЕ входит в checksum (не влияет на детерминизм).
+    public final long[]   busy;
+
     public World(int size) {
         this.size = size;
         inv         = new int[size * Components.SLOTS];
@@ -33,6 +36,7 @@ public final class World {
         archLo = new int[Archetype.COUNT];
         archHi = new int[Archetype.COUNT];
         for (int a = 0; a < Archetype.COUNT; a++) { archLo[a] = 0; archHi[a] = size; }
+        busy = new long[size];
     }
 
     public int lo(int arch) { return arch < 0 ? 0    : archLo[arch]; }
@@ -66,6 +70,7 @@ public final class World {
         System.arraycopy(link,        0, w.link,        0, size);
         System.arraycopy(archLo,      0, w.archLo,      0, Archetype.COUNT);
         System.arraycopy(archHi,      0, w.archHi,      0, Archetype.COUNT);
+        System.arraycopy(busy,        0, w.busy,        0, size);
         return w;
     }
 }

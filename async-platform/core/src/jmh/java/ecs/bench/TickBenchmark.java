@@ -38,6 +38,9 @@ public class TickBenchmark {
     @Param({"8"})
     public int threads;
 
+    @Param({"0", "64"})
+    public int work;
+
     private Scheduler sched;
     private World worldRef;
     private World worldPar;
@@ -45,6 +48,7 @@ public class TickBenchmark {
 
     @Setup(Level.Trial)
     public void setup() {
+        ecs.Work.WEIGHT = work;
         List<GameSystem> systems = BlockEntityScene.systems();
         worldRef = BlockEntityScene.build(n);
         worldPar = BlockEntityScene.build(n);

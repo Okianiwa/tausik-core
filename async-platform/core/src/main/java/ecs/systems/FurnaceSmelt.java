@@ -20,6 +20,7 @@ public final class FurnaceSmelt implements GameSystem {
     public long writes() { return Components.mask(Components.PROGRESS, Components.INVENTORY, Components.FUEL); }
 
     public void run(View v, int e, CommandBuffer cb) {
+        v.busy(e); // диагностический вес (Work.WEIGHT), 0 по умолчанию
         if (v.recipeTicks(e) <= 0) return; // не печь (архетип гейтится данными)
 
         int burn = v.burnTime(e);

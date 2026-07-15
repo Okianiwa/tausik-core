@@ -17,6 +17,7 @@ public final class HopperTransfer implements GameSystem {
     public long writes() { return 0; } // только отложенные эффекты через cmd
 
     public void run(View v, int e, CommandBuffer cb) {
+        v.busy(e); // диагностический вес (Work.WEIGHT), 0 по умолчанию
         int target = v.link(e);
         if (target < 0) return; // не хоппер
         if (v.inv(e, Components.SLOT_OUTPUT) > 0) {

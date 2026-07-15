@@ -47,4 +47,9 @@ public final class View {
 
     // LINK (read-only)
     public int link(int e) { checkRead(Components.LINK); return w.link[e]; }
+
+    /** Диагностическая busy-work в scratch-приёмник (вне контракта, вне checksum). */
+    public void busy(int e) {
+        if (Work.WEIGHT > 0) w.busy[e] = Work.spin(e * 2654435761L + w.busy[e]);
+    }
 }

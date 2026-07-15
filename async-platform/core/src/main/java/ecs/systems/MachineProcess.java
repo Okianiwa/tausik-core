@@ -20,6 +20,7 @@ public final class MachineProcess implements GameSystem {
     public long writes() { return Components.mask(Components.PROGRESS, Components.INVENTORY, Components.ENERGY); }
 
     public void run(View v, int e, CommandBuffer cb) {
+        v.busy(e); // диагностический вес (Work.WEIGHT), 0 по умолчанию
         if (v.energy(e) <= 0) return; // не машина (архетип гейтится данными)
 
         if (v.energy(e) >= COST && v.inv(e, Components.SLOT_INPUT) > 0) {
