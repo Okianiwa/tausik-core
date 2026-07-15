@@ -688,13 +688,18 @@ def _handle_verify(
     except Exception as e:
         return f"Error: {e}"
     gates = [r.get("name", "?") for r in result.get("results", [])]
-    return (
+    out = (
         f"verify task='{task_slug or '-'}' "
         f"passed={result['passed']} "
         f"status={result['status']} "
         f"trigger={result['trigger']} "
         f"gates={gates}"
     )
+    # verify-skipped-silent-nocache: surface the all-skipped "passed but NOT
+    # cached" trap so it never reads as a bare passed=True success.
+    if result.get("warning"):
+        out += f"\n⚠ {result['warning']}"
+    return out
 
 
 def _handle_stack_reset(name: str) -> str:

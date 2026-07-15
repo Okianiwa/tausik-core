@@ -58,9 +58,7 @@ class TestPublicServiceVerifyMethod:
         assert "passed" in result
         assert result["task_slug"] is None
         # No verification_runs row written when task_slug is None.
-        rows = svc.be._conn.execute(
-            "SELECT COUNT(*) AS n FROM verification_runs"
-        ).fetchone()
+        rows = svc.be._conn.execute("SELECT COUNT(*) AS n FROM verification_runs").fetchone()
         assert rows["n"] == 0
 
 
@@ -132,8 +130,53 @@ class TestMcpHandlerNoPrivateAttrAccess:
             # Find `_handle_verify` body — terminate at next top-level def.
             start = src.index("def _handle_verify(")
             end = src.find("\ndef ", start + 1)
-            body = src[start: end if end != -1 else len(src)]
+            body = src[start : end if end != -1 else len(src)]
             assert "svc.be._conn" not in body, (
                 f"_handle_verify in {ide} still touches svc.be._conn — "
                 "must use ProjectService.run_verify_for_task instead."
+            )
+
+
+class TestVerifySkippedSilentNoCache:
+    """verify-skipped-silent-nocache: a PASS made entirely of skipped gates
+    (no tests mapped) must be flagged not-cached — never read as a silent green
+    that a follow-up `task done` then fails to find."""
+
+    def test_all_skipped_pass_flagged_not_cached(self, task_with_files):
+        # task 't' has no relevant_files -> the scoped 'verify' pytest gate
+        # SKIPS -> passed=True but nothing real ran.
+        result = task_with_files.run_verify_for_task("t")
+        assert result["passed"] is True
+        assert result["cached"] is False
+        assert result["warning"] and "NOT CACHED" in result["warning"]
+
+    def test_all_skipped_pass_not_recorded_as_green(self, task_with_files):
+        # Protection intact: all-skipped must NOT persist a green row, otherwise
+        # the next caller's gates get silently skipped via a bogus cache hit.
+        task_with_files.run_verify_for_task("t")
+        rows = task_with_files.be._conn.execute(
+            "SELECT COUNT(*) AS n FROM verification_runs WHERE exit_code = 0"
+        ).fetchone()
+        assert rows["n"] == 0
+
+    def test_both_handlers_surface_warning(self):
+        # Source-level parity check (mirrors TestMcpHandlerNoPrivateAttrAccess):
+        # both IDE handlers must append result['warning'] to the reply.
+        for ide in ("claude", "cursor"):
+            path = os.path.join(
+                os.path.dirname(__file__),
+                "..",
+                "harness",
+                ide,
+                "mcp",
+                "project",
+                "handlers.py",
+            )
+            with open(path, encoding="utf-8") as f:
+                src = f.read()
+            start = src.index("def _handle_verify(")
+            end = src.find("\ndef ", start + 1)
+            body = src[start : end if end != -1 else len(src)]
+            assert 'result.get("warning")' in body, (
+                f"_handle_verify in {ide} must surface result['warning']"
             )

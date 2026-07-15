@@ -55,9 +55,7 @@ def cmd_verify(svc: ProjectService, args: Any) -> None:
     scope = getattr(args, "scope", "manual")
     files_hash = compute_files_hash(relevant_files)
     gate_sig = resolve_gate_signature("verify")
-    cache_command = (
-        f"trigger=verify|sig={gate_sig}|files={','.join(sorted(relevant_files))}"
-    )
+    cache_command = f"trigger=verify|sig={gate_sig}|files={','.join(sorted(relevant_files))}"
 
     cache_consistent = not (
         task_created_at and relevant_files
@@ -100,10 +98,19 @@ def cmd_verify(svc: ProjectService, args: Any) -> None:
     print(format_results(results))
     print(f"Duration: {duration_ms} ms")
 
-    summary = (
-        ", ".join(
-            r["name"] + "=" + ("PASS" if r["passed"] else "FAIL") for r in results
+    # verify-skipped-silent-nocache: warn when a PASS came entirely from skipped
+    # gates (no tests mapped) — nothing was actually tested. The CLI still
+    # records under the caller's scope (manual = asserted), but the operator
+    # must know this was not a real gate pass.
+    if passed and results and all(r.get("skipped") for r in results):
+        print(
+            "WARN: verify PASSED but every gate was SKIPPED (no tests mapped) — "
+            "nothing was actually tested. Meaningful only under --scope manual; "
+            "otherwise add tests (tests/test_<module>.py)."
         )
+
+    summary = (
+        ", ".join(r["name"] + "=" + ("PASS" if r["passed"] else "FAIL") for r in results)
         or "(no gates configured)"
     )
     record_run(
@@ -117,8 +124,7 @@ def cmd_verify(svc: ProjectService, args: Any) -> None:
         duration_ms=duration_ms,
     )
     print(
-        f"Recorded verification_run "
-        f"(task_slug={task_slug or '-'}, exit={'0' if passed else '1'})."
+        f"Recorded verification_run (task_slug={task_slug or '-'}, exit={'0' if passed else '1'})."
     )
     if not passed:
         raise SystemExit(1)

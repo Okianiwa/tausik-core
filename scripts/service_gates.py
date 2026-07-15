@@ -92,9 +92,36 @@ class GatesMixin:
             task_created_at=task_created_at,
             trigger=trigger,
         )
+        # Silent-trap guard (verify-skipped-silent-nocache): verify can report
+        # passed=True while EVERY gate was SKIPPED (no tests mapped — e.g. a
+        # docs-only or non-Python deliverable). run_gates_with_cache refuses to
+        # record an all-skipped run as green (see service_verification
+        # has_real_pass), so a follow-up `task done` Verify-First finds nothing
+        # and blocks with a confusing "no fresh verify run". Surface it loudly
+        # via `cached`/`warning` so callers don't read a bare passed=True as
+        # "verified & cached".
+        has_real_pass = any(r.get("passed") and not r.get("skipped") for r in (results or []))
+        cached = status == "hit" or (passed and has_real_pass)
+        # Only meaningful when verify gates are actually configured for this
+        # trigger — otherwise "nothing ran" is expected, not a trap.
+        from verify_cache import resolve_gate_signature
+
+        gates_configured = resolve_gate_signature(trigger) not in ("empty", "unavailable")
+        warning = None
+        if passed and not has_real_pass and status != "hit" and gates_configured:
+            # All-skipped OR no gate produced a real pass → run_gates_with_cache
+            # did NOT record a green, so `task done` Verify-First won't see it.
+            warning = (
+                "NOT CACHED — verify PASSED but no gate produced a real pass "
+                "(gates skipped / no tests mapped). `task done` Verify-First will "
+                "NOT see this. Use scope='manual' for non-test deliverables, or "
+                "add tests."
+            )
         return {
             "passed": passed,
             "status": status,
+            "cached": cached,
+            "warning": warning,
             "scope": scope,
             "trigger": trigger,
             "task_slug": task_slug,
