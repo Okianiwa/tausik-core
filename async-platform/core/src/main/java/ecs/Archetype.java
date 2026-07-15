@@ -11,7 +11,8 @@ public final class Archetype {
     public static final int MACHINE = 1;
     public static final int HOPPER  = 2;
     public static final int MOB     = 3;   // сущности (грязные подсистемы)
-    public static final int COUNT   = 4;
+    public static final int REDSTONE = 4;  // ordered-каскад
+    public static final int COUNT   = 5;
 
     /** Полуоткрытые диапазоны [lo,hi) пересекаются? Пустой диапазон (lo==hi) не пересекается ни с чем. */
     public static boolean rangeOverlap(int loA, int hiA, int loB, int hiB) {

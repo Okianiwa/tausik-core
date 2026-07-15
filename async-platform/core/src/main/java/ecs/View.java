@@ -66,6 +66,12 @@ public final class View {
     public int health(int e) { checkRead(Components.HEALTH); return w.health[e]; }
     public void setHealth(int e, int v) { checkWrite(Components.HEALTH); w.health[e] = v; }
 
+    // REDSTONE (double-buffer: читаем POWER, пишем POWER_NEXT)
+    public int power(int e) { checkRead(Components.POWER); return w.power[e]; }
+    public void setPowerNext(int e, int v) { checkWrite(Components.POWER_NEXT); w.powerNext[e] = v; }
+    public int source(int e) { checkRead(Components.SOURCE); return w.source[e]; }
+    public int gridWidth() { return w.gridWidth; }
+
     /** Диагностическая busy-work в scratch-приёмник (вне контракта, вне checksum). */
     public void busy(int e) {
         if (Work.WEIGHT > 0) w.busy[e] = Work.spin(e * 2654435761L + w.busy[e]);

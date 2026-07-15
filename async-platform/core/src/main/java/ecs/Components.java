@@ -15,7 +15,10 @@ public final class Components {
     public static final int POSITION  = 7;   // сущности: posX/posY
     public static final int VELOCITY  = 8;   // сущности: velX/velY
     public static final int HEALTH    = 9;   // сущности
-    public static final int COUNT     = 10;
+    public static final int POWER     = 10;  // редстоун: стабильный (read) буфер
+    public static final int POWER_NEXT= 11;  // редстоун: буфер записи (double-buffer каскада)
+    public static final int SOURCE    = 12;  // редстоун: клетка-источник (read-only)
+    public static final int COUNT     = 13;
 
     // Слоты инвентаря блок-энтити (entity-major раскладка: e*SLOTS + slot).
     public static final int SLOT_INPUT  = 0;

@@ -21,6 +21,11 @@ public final class World {
     public final double[] velX, velY; // VELOCITY
     public final int[]    health;     // HEALTH
 
+    public final int[]    power;      // POWER (редстоун, стабильный буфер)
+    public final int[]    powerNext;  // POWER_NEXT (буфер записи каскада)
+    public final int[]    source;     // SOURCE (1 = источник)
+    public int            gridWidth;  // ширина grid для вычисления соседей
+
     // Диапазоны строк по архетипу [lo,hi). Дефолт — весь мир; сцена задаёт disjoint-разбиение.
     public final int[]    archLo;
     public final int[]    archHi;
@@ -40,6 +45,7 @@ public final class World {
         posX = new double[size]; posY = new double[size];
         velX = new double[size]; velY = new double[size];
         health = new int[size];
+        power = new int[size]; powerNext = new int[size]; source = new int[size];
         archLo = new int[Archetype.COUNT];
         archHi = new int[Archetype.COUNT];
         for (int a = 0; a < Archetype.COUNT; a++) { archLo[a] = 0; archHi[a] = size; }
@@ -67,6 +73,8 @@ public final class World {
             h = 31 * h + Double.doubleToLongBits(velX[i]);
             h = 31 * h + Double.doubleToLongBits(velY[i]);
             h = 31 * h + health[i];
+            h = 31 * h + power[i];
+            h = 31 * h + source[i];
         }
         return h;
     }
@@ -88,6 +96,10 @@ public final class World {
         System.arraycopy(velX,        0, w.velX,        0, size);
         System.arraycopy(velY,        0, w.velY,        0, size);
         System.arraycopy(health,      0, w.health,      0, size);
+        System.arraycopy(power,       0, w.power,       0, size);
+        System.arraycopy(powerNext,   0, w.powerNext,   0, size);
+        System.arraycopy(source,      0, w.source,      0, size);
+        w.gridWidth = gridWidth;
         return w;
     }
 }
