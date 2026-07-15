@@ -46,9 +46,9 @@ public class TickBenchmark {
     @Setup(Level.Trial)
     public void setup() {
         List<GameSystem> systems = BlockEntityScene.systems();
-        sched = new Scheduler(systems);
         worldRef = BlockEntityScene.build(n);
         worldPar = BlockEntityScene.build(n);
+        sched = new Scheduler(systems, worldRef);
         pool = Executors.newFixedThreadPool(threads);
     }
 

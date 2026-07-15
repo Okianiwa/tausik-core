@@ -7,39 +7,52 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 
 /**
- * Из объявленных reads/writes строит стадии (жадная раскладка неконфликтующих систем)
- * и исполняет их: reference (однопоточно) и parallel (data-parallel по чанкам внутри стадии).
+ * Из объявленных reads/writes И диапазонов архетипов строит стадии и исполняет их.
+ * Тонкая гранулярность: две системы конфликтуют ТОЛЬКО если пересекаются и множества компонентов,
+ * И их диапазоны строк. Системы разных архетипов с общим типом компонента, но disjoint-строками
+ * попадают в одну стадию (возврат системного параллелизма — вывод среза 1).
  * Детерминизм — фикс. порядок систем + упорядоченный apply отсортированных буферов.
  */
 public final class Scheduler {
     public final List<GameSystem> systems;
+    public final int[] sysLo;
+    public final int[] sysHi;
     public final List<int[]> stages; // стадия = массив индексов систем (в стабильном порядке)
 
-    public Scheduler(List<GameSystem> systems) {
+    public Scheduler(List<GameSystem> systems, World w) {
         this.systems = systems;
-        this.stages = plan(systems);
+        this.sysLo = new int[systems.size()];
+        this.sysHi = new int[systems.size()];
+        for (int i = 0; i < systems.size(); i++) {
+            int a = systems.get(i).archetype();
+            sysLo[i] = w.lo(a);
+            sysHi[i] = w.hi(a);
+        }
+        this.stages = plan(systems, sysLo, sysHi);
     }
 
-    /** conflict(A,B) ⇔ (wA∩wB)∪(wA∩rB)∪(rA∩wB) ≠ ∅. read∩read — не конфликт. */
-    public static List<int[]> plan(List<GameSystem> systems) {
+    private static boolean componentConflict(GameSystem a, GameSystem b) {
+        return (a.writes() & b.writes()) != 0 || (a.writes() & b.reads()) != 0 || (a.reads() & b.writes()) != 0;
+    }
+
+    /** conflict(A,B) ⇔ пересечение компонентов И пересечение диапазонов строк. */
+    public static List<int[]> plan(List<GameSystem> systems, int[] lo, int[] hi) {
         List<List<Integer>> stageSys = new ArrayList<>();
-        List<long[]> stageMask = new ArrayList<>(); // [reads, writes]
         for (int i = 0; i < systems.size(); i++) {
-            GameSystem s = systems.get(i);
             int placed = -1;
-            for (int st = 0; st < stageSys.size(); st++) {
-                long sr = stageMask.get(st)[0], sw = stageMask.get(st)[1];
-                boolean conflict = (s.writes() & sr) != 0 || (s.writes() & sw) != 0 || (s.reads() & sw) != 0;
-                if (!conflict) { placed = st; break; }
+            for (int st = 0; st < stageSys.size() && placed < 0; st++) {
+                boolean conflict = false;
+                for (int j : stageSys.get(st)) {
+                    if (componentConflict(systems.get(i), systems.get(j))
+                            && Archetype.rangeOverlap(lo[i], hi[i], lo[j], hi[j])) {
+                        conflict = true;
+                        break;
+                    }
+                }
+                if (!conflict) placed = st;
             }
-            if (placed < 0) {
-                stageSys.add(new ArrayList<>());
-                stageMask.add(new long[]{0, 0});
-                placed = stageSys.size() - 1;
-            }
+            if (placed < 0) { stageSys.add(new ArrayList<>()); placed = stageSys.size() - 1; }
             stageSys.get(placed).add(i);
-            stageMask.get(placed)[0] |= s.reads();
-            stageMask.get(placed)[1] |= s.writes();
         }
         List<int[]> out = new ArrayList<>();
         for (List<Integer> l : stageSys) {
@@ -50,32 +63,33 @@ public final class Scheduler {
         return out;
     }
 
-    /** Однопоточный эталон: системы в порядке стадий, энтити по возрастанию. */
+    /** Однопоточный эталон: системы в порядке стадий, каждая — по своему диапазону строк. */
     public void runReference(World w) {
         for (int[] stage : stages) {
             List<CommandBuffer> buffers = new ArrayList<>();
             for (int si : stage) {
                 GameSystem s = systems.get(si);
                 View v = new View(w).bind(s.reads(), s.writes());
-                CommandBuffer cb = new CommandBuffer(si, 0);
-                for (int e = 0; e < w.size; e++) s.run(v, e, cb);
+                CommandBuffer cb = new CommandBuffer(si, sysLo[si]);
+                for (int e = sysLo[si]; e < sysHi[si]; e++) s.run(v, e, cb);
                 buffers.add(cb);
             }
             applyOrdered(w, buffers);
         }
     }
 
-    /** Параллельно: внутри каждой стадии — независимые задачи (система × чанк энтити). */
+    /** Параллельно: внутри стадии — независимые задачи (система × чанк её диапазона строк). */
     public void runParallel(World w, ExecutorService pool, int threads) throws Exception {
         int chunkCount = Math.max(1, threads);
-        int[] bounds = chunkBounds(w.size, chunkCount);
         for (int[] stage : stages) {
             List<Callable<CommandBuffer>> tasks = new ArrayList<>();
             for (int si : stage) {
                 final GameSystem s = systems.get(si);
                 final int sysIdx = si;
+                int[] bounds = chunkBounds(sysLo[si], sysHi[si], chunkCount);
                 for (int c = 0; c < chunkCount; c++) {
                     final int lo = bounds[c], hi = bounds[c + 1];
+                    if (lo == hi) continue;
                     tasks.add(() -> {
                         View v = new View(w).bind(s.reads(), s.writes());
                         CommandBuffer cb = new CommandBuffer(sysIdx, lo);
@@ -91,11 +105,12 @@ public final class Scheduler {
         }
     }
 
-    private static int[] chunkBounds(int n, int chunks) {
+    private static int[] chunkBounds(int lo, int hi, int chunks) {
+        int n = hi - lo;
         int[] b = new int[chunks + 1];
-        int base = n / chunks, rem = n % chunks, idx = 0;
+        int base = n / chunks, rem = n % chunks, idx = lo;
         for (int i = 0; i < chunks; i++) { b[i] = idx; idx += base + (i < rem ? 1 : 0); }
-        b[chunks] = n;
+        b[chunks] = hi;
         return b;
     }
 

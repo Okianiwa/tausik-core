@@ -27,15 +27,15 @@ class ContractTest {
 
     @Test
     void undeclaredWriteThrows() {
-        Scheduler s = new Scheduler(List.of(new RogueSystem()));
         World w = new World(4);
+        Scheduler s = new Scheduler(List.of(new RogueSystem()), w);
         assertThrows(ContractViolation.class, () -> s.runReference(w));
     }
 
     @Test
     void undeclaredReadThrows() {
-        Scheduler s = new Scheduler(List.of(new PeekSystem()));
         World w = new World(4);
+        Scheduler s = new Scheduler(List.of(new PeekSystem()), w);
         assertThrows(ContractViolation.class, () -> s.runReference(w));
     }
 
@@ -47,8 +47,8 @@ class ContractTest {
             public long writes() { return Components.bit(Components.PROGRESS); }
             public void run(View v, int e, CommandBuffer cb) { v.setProgress(e, v.progress(e) + 1); }
         };
-        Scheduler s = new Scheduler(List.of(ok));
         World w = new World(4);
+        Scheduler s = new Scheduler(List.of(ok), w);
         assertDoesNotThrow(() -> s.runReference(w));
     }
 }

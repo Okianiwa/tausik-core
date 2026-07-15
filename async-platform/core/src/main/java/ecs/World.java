@@ -17,6 +17,10 @@ public final class World {
     public final int[]    recipeTicks;// RECIPE (read-only)
     public final int[]    link;       // LINK: цель хоппера (индекс энтити или -1)
 
+    // Диапазоны строк по архетипу [lo,hi). Дефолт — весь мир; сцена задаёт disjoint-разбиение.
+    public final int[]    archLo;
+    public final int[]    archHi;
+
     public World(int size) {
         this.size = size;
         inv         = new int[size * Components.SLOTS];
@@ -26,7 +30,13 @@ public final class World {
         burnTime    = new int[size];
         recipeTicks = new int[size];
         link        = new int[size];
+        archLo = new int[Archetype.COUNT];
+        archHi = new int[Archetype.COUNT];
+        for (int a = 0; a < Archetype.COUNT; a++) { archLo[a] = 0; archHi[a] = size; }
     }
+
+    public int lo(int arch) { return arch < 0 ? 0    : archLo[arch]; }
+    public int hi(int arch) { return arch < 0 ? size : archHi[arch]; }
 
     public int invIndex(int entity, int slot) { return entity * Components.SLOTS + slot; }
 
@@ -54,6 +64,8 @@ public final class World {
         System.arraycopy(burnTime,    0, w.burnTime,    0, size);
         System.arraycopy(recipeTicks, 0, w.recipeTicks, 0, size);
         System.arraycopy(link,        0, w.link,        0, size);
+        System.arraycopy(archLo,      0, w.archLo,      0, Archetype.COUNT);
+        System.arraycopy(archHi,      0, w.archHi,      0, Archetype.COUNT);
         return w;
     }
 }

@@ -8,6 +8,8 @@ public interface GameSystem {
     String name();
     long reads();
     long writes();
+    /** Архетип, над которым работает система. UNIVERSAL — весь мир (по умолчанию). */
+    default int archetype() { return Archetype.UNIVERSAL; }
     /** Логика для одной энтити. Структурные/чужеэнтити эффекты — только через CommandBuffer. */
     void run(View v, int entity, CommandBuffer cb);
 }

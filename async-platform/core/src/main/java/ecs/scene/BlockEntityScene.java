@@ -26,8 +26,13 @@ public final class BlockEntityScene {
     public static World build(int n) {
         World w = new World(n);
         int third = Math.max(1, n / 3);
-        int furnaces = third;
-        int machines = third;
+        int furnaces = Math.min(third, n);
+        int machines = Math.min(third, Math.max(0, n - furnaces));
+
+        // Disjoint-диапазоны строк по архетипу — основа тонкой гранулярности конфликта.
+        w.archLo[ecs.Archetype.FURNACE] = 0;             w.archHi[ecs.Archetype.FURNACE] = furnaces;
+        w.archLo[ecs.Archetype.MACHINE] = furnaces;      w.archHi[ecs.Archetype.MACHINE] = furnaces + machines;
+        w.archLo[ecs.Archetype.HOPPER]  = furnaces + machines; w.archHi[ecs.Archetype.HOPPER] = n;
 
         for (int e = 0; e < n; e++) {
             if (e < furnaces) {                       // печь

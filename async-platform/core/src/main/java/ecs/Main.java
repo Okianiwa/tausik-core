@@ -20,13 +20,12 @@ public final class Main {
         int threads = args.length > 2 ? Integer.parseInt(args[2]) : 8;
 
         List<GameSystem> systems = BlockEntityScene.systems();
-        Scheduler sched = new Scheduler(systems);
+        World ref = BlockEntityScene.build(n);
+        World par = BlockEntityScene.build(n);
+        Scheduler sched = new Scheduler(systems, ref);
 
         System.out.printf("Сцена: N=%d блок-энтити, ticks=%d, threads=%d%n", n, ticks, threads);
         printStages(sched);
-
-        World ref = BlockEntityScene.build(n);
-        World par = BlockEntityScene.build(n);
 
         ExecutorService pool = Executors.newFixedThreadPool(threads);
         try {

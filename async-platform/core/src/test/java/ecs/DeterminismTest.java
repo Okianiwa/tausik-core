@@ -13,15 +13,15 @@ class DeterminismTest {
     private static final int N = 30_000, TICKS = 25;
 
     private static long runReference() {
-        Scheduler s = new Scheduler(BlockEntityScene.systems());
         World w = BlockEntityScene.build(N);
+        Scheduler s = new Scheduler(BlockEntityScene.systems(), w);
         for (int t = 0; t < TICKS; t++) s.runReference(w);
         return w.checksum();
     }
 
     private static long runParallel(int threads) throws Exception {
-        Scheduler s = new Scheduler(BlockEntityScene.systems());
         World w = BlockEntityScene.build(N);
+        Scheduler s = new Scheduler(BlockEntityScene.systems(), w);
         ExecutorService pool = Executors.newFixedThreadPool(threads);
         try {
             for (int t = 0; t < TICKS; t++) s.runParallel(w, pool, threads);

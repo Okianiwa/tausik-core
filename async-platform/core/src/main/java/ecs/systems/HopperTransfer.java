@@ -12,6 +12,7 @@ import ecs.View;
  */
 public final class HopperTransfer implements GameSystem {
     public String name() { return "HopperTransfer"; }
+    public int archetype() { return ecs.Archetype.HOPPER; }
     public long reads()  { return Components.mask(Components.INVENTORY, Components.LINK); }
     public long writes() { return 0; } // только отложенные эффекты через cmd
 

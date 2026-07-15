@@ -15,6 +15,7 @@ public final class MachineProcess implements GameSystem {
     private static final int MACHINE_TICKS = 100;
 
     public String name() { return "MachineProcess"; }
+    public int archetype() { return ecs.Archetype.MACHINE; }
     public long reads()  { return 0; }
     public long writes() { return Components.mask(Components.PROGRESS, Components.INVENTORY, Components.ENERGY); }
 

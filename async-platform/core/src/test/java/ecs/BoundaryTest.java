@@ -14,9 +14,9 @@ class BoundaryTest {
 
     @Test
     void emptyWorldDoesNotCrash() throws Exception {
-        Scheduler s = new Scheduler(BlockEntityScene.systems());
         World ref = new World(0);
         World par = new World(0);
+        Scheduler s = new Scheduler(BlockEntityScene.systems(), ref);
         ExecutorService pool = Executors.newFixedThreadPool(4);
         try {
             assertDoesNotThrow(() -> s.runReference(ref));
@@ -35,8 +35,8 @@ class BoundaryTest {
             public long writes() { return 0; }
             public void run(View v, int e, CommandBuffer cb) { v.heat(e); }
         };
-        Scheduler s = new Scheduler(List.of(reader));
         World w = new World(1000);
+        Scheduler s = new Scheduler(List.of(reader), w);
         long before = w.checksum();
         s.runReference(w);
         assertEquals(before, w.checksum(), "pure-read система не меняет мир");

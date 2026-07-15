@@ -15,6 +15,7 @@ public final class FurnaceSmelt implements GameSystem {
     private static final double MIN_HEAT = 400.0;
 
     public String name() { return "FurnaceSmelt"; }
+    public int archetype() { return ecs.Archetype.FURNACE; }
     public long reads()  { return Components.mask(Components.RECIPE, Components.HEAT); }
     public long writes() { return Components.mask(Components.PROGRESS, Components.INVENTORY, Components.FUEL); }
 
