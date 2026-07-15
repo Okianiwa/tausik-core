@@ -12,7 +12,10 @@ public final class Components {
     public static final int FUEL      = 4;   // burnTime
     public static final int RECIPE    = 5;   // read-only константа тика плавки
     public static final int LINK      = 6;   // read-only цель хоппера
-    public static final int COUNT     = 7;
+    public static final int POSITION  = 7;   // сущности: posX/posY
+    public static final int VELOCITY  = 8;   // сущности: velX/velY
+    public static final int HEALTH    = 9;   // сущности
+    public static final int COUNT     = 10;
 
     // Слоты инвентаря блок-энтити (entity-major раскладка: e*SLOTS + slot).
     public static final int SLOT_INPUT  = 0;

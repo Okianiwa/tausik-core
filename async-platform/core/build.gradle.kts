@@ -43,3 +43,9 @@ tasks.register<JavaExec>("demo") {
     mainClass = "ecs.Main"
     classpath = sourceSets["main"].runtimeClasspath
 }
+
+tasks.register<JavaExec>("entityDemo") {
+    group = "application"
+    mainClass = "ecs.EntityDemo"
+    classpath = sourceSets["main"].runtimeClasspath
+}

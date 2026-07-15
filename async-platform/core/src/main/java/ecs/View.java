@@ -13,6 +13,8 @@ public final class View {
 
     public View bind(long reads, long writes) { this.reads = reads; this.writes = writes; return this; }
 
+    public int size() { return w.size; } // для обёртки индексов соседей
+
     private void checkRead(int comp) {
         if (((reads | writes) & Components.bit(comp)) == 0)
             throw new ContractViolation("read необъявленного компонента " + comp);
@@ -47,6 +49,22 @@ public final class View {
 
     // LINK (read-only)
     public int link(int e) { checkRead(Components.LINK); return w.link[e]; }
+
+    // POSITION (сущности; чтение соседа = posX(other))
+    public double posX(int e) { checkRead(Components.POSITION); return w.posX[e]; }
+    public double posY(int e) { checkRead(Components.POSITION); return w.posY[e]; }
+    public void setPosX(int e, double v) { checkWrite(Components.POSITION); w.posX[e] = v; }
+    public void setPosY(int e, double v) { checkWrite(Components.POSITION); w.posY[e] = v; }
+
+    // VELOCITY
+    public double velX(int e) { checkRead(Components.VELOCITY); return w.velX[e]; }
+    public double velY(int e) { checkRead(Components.VELOCITY); return w.velY[e]; }
+    public void setVelX(int e, double v) { checkWrite(Components.VELOCITY); w.velX[e] = v; }
+    public void setVelY(int e, double v) { checkWrite(Components.VELOCITY); w.velY[e] = v; }
+
+    // HEALTH
+    public int health(int e) { checkRead(Components.HEALTH); return w.health[e]; }
+    public void setHealth(int e, int v) { checkWrite(Components.HEALTH); w.health[e] = v; }
 
     /** Диагностическая busy-work в scratch-приёмник (вне контракта, вне checksum). */
     public void busy(int e) {

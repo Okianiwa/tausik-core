@@ -12,7 +12,7 @@ import java.util.concurrent.Executors;
  * Аргументы: [N] [ticks] [threads]. По умолчанию 150000 50 8 (пул по физ.ядрам).
  */
 public final class Main {
-    private static final String[] COMP = {"INVENTORY","ENERGY","PROGRESS","HEAT","FUEL","RECIPE","LINK"};
+    private static final String[] COMP = {"INVENTORY","ENERGY","PROGRESS","HEAT","FUEL","RECIPE","LINK","POSITION","VELOCITY","HEALTH"};
 
     public static void main(String[] args) throws Exception {
         int n       = args.length > 0 ? Integer.parseInt(args[0]) : 150_000;

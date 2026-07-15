@@ -17,6 +17,10 @@ public final class World {
     public final int[]    recipeTicks;// RECIPE (read-only)
     public final int[]    link;       // LINK: цель хоппера (индекс энтити или -1)
 
+    public final double[] posX, posY; // POSITION (сущности)
+    public final double[] velX, velY; // VELOCITY
+    public final int[]    health;     // HEALTH
+
     // Диапазоны строк по архетипу [lo,hi). Дефолт — весь мир; сцена задаёт disjoint-разбиение.
     public final int[]    archLo;
     public final int[]    archHi;
@@ -33,6 +37,9 @@ public final class World {
         burnTime    = new int[size];
         recipeTicks = new int[size];
         link        = new int[size];
+        posX = new double[size]; posY = new double[size];
+        velX = new double[size]; velY = new double[size];
+        health = new int[size];
         archLo = new int[Archetype.COUNT];
         archHi = new int[Archetype.COUNT];
         for (int a = 0; a < Archetype.COUNT; a++) { archLo[a] = 0; archHi[a] = size; }
@@ -55,6 +62,11 @@ public final class World {
             h = 31 * h + burnTime[i];
             h = 31 * h + recipeTicks[i];
             h = 31 * h + link[i];
+            h = 31 * h + Double.doubleToLongBits(posX[i]);
+            h = 31 * h + Double.doubleToLongBits(posY[i]);
+            h = 31 * h + Double.doubleToLongBits(velX[i]);
+            h = 31 * h + Double.doubleToLongBits(velY[i]);
+            h = 31 * h + health[i];
         }
         return h;
     }
@@ -71,6 +83,11 @@ public final class World {
         System.arraycopy(archLo,      0, w.archLo,      0, Archetype.COUNT);
         System.arraycopy(archHi,      0, w.archHi,      0, Archetype.COUNT);
         System.arraycopy(busy,        0, w.busy,        0, size);
+        System.arraycopy(posX,        0, w.posX,        0, size);
+        System.arraycopy(posY,        0, w.posY,        0, size);
+        System.arraycopy(velX,        0, w.velX,        0, size);
+        System.arraycopy(velY,        0, w.velY,        0, size);
+        System.arraycopy(health,      0, w.health,      0, size);
         return w;
     }
 }
