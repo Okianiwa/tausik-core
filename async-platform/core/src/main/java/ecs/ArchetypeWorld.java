@@ -66,15 +66,60 @@ public final class ArchetypeWorld {
 
     /**
      * Создаёт энтити в архетипе mask, возвращает СТАБИЛЬНЫЙ entityId.
-     * Это построение сцены, а не deferred-структурное изменение из параллельной фазы
-     * (те — вне объёма задачи, см. scope_exclude).
+     * Зовётся и при построении сцены, и из фазы S барьера (материализация OP_CREATE).
+     * Гард инварианта C — потому что storeIndex() может ДОБАВИТЬ архетип, а addRow() нарастить
+     * колонки: и то и другое переаллоцирует массивы под работающими задачами.
+     *
+     * id МОНОТОНЕН и не переиспользуется (решение #7): именно поэтому entityLoc удалённой навсегда
+     * остаётся UNPLACED, и любая stale-ссылка ловится громко в checkAlive/applyOrdered БЕСПЛАТНО.
      */
     public int createEntity(long mask) {
+        if (rowsFrozen)
+            throw new ContractViolation("createEntity(mask=" + Long.toBinaryString(mask)
+                    + ") внутри исполняющейся стадии: строки заморожены до барьера (инвариант C). "
+                    + "Структурные изменения — только в apply.");
         int id = entityCount++;
         ensureCapacity(id + 1);
         int si = storeIndex(mask);
         entityLoc[id] = pack(si, stores.get(si).addRow(id));
         return id;
+    }
+
+    /**
+     * Удаляет энтити: swap-remove из её архетипа + пометка UNPLACED НАВСЕГДА.
+     * id НЕ переиспользуется (решение #7) — free-list с поколениями отвергнут, потому что при
+     * переполнении поколения stale-ссылка совпала бы с живой целью и ТИХО записала в чужую энтити.
+     * Цена (рост entityLoc по числу когда-либо созданных) названа и мерится срезом 7.
+     */
+    public void destroyEntity(int entityId) {
+        if (rowsFrozen)
+            throw new ContractViolation("destroyEntity(" + entityId + ") внутри исполняющейся стадии: "
+                    + "строки заморожены до барьера (инвариант C). Структурные изменения — только в apply.");
+        int id = checkAlive(entityId);
+        long loc = entityLoc[id];
+        int si = storeIdxOf(loc);
+        int row = rowOfLoc(loc);
+        int moved = stores.get(si).swapRemove(row);
+        if (moved >= 0) entityLoc[moved] = pack(si, row); // переехавший занял освободившуюся строку
+        entityLoc[id] = UNPLACED;
+    }
+
+    /**
+     * Добавить/убрать компонент = смена архетипа. Обе — поверх migrate(), поэтому GENERIC по id
+     * компонента: перечислять компоненты руками не нужно, и AC #2 среза 6 не откатывается.
+     * Гард инварианта C наследуется от migrate().
+     */
+    public void addComponent(int entityId, int comp) {
+        migrate(entityId, storeOf(entityId).mask | Components.bit(comp));
+    }
+
+    public void removeComponent(int entityId, int comp) {
+        migrate(entityId, storeOf(entityId).mask & ~Components.bit(comp));
+    }
+
+    /** Размещена ли энтити (жива). Не бросает — в отличие от checkAlive. */
+    public boolean isAlive(int entityId) {
+        return entityId >= 0 && entityId < entityCount && storeIdxOf(entityLoc[entityId]) >= 0;
     }
 
     /**
