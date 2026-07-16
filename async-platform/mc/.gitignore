@@ -13,6 +13,7 @@
 !.gitignore
 !README.md
 !setup_mc_server.py
+!tick_probe.py
 !prior-art-folia-mcmt.md
 !tick-profile.md
 
