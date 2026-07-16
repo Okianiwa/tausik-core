@@ -65,6 +65,20 @@ CLI: ВСЕГДА `.tausik/tausik <команда>`. НИКОГДА `python scri
 
 <!-- DYNAMIC:START -->
 ## Current State
-Session: #8 (active) | Branch: feat/core-rewrite-blockentity-slice | Version: 1.4.0
-Tasks: 13/20 done, 0 active, 0 blocked
+Session: none | Branch: feat/core-rewrite-blockentity-slice | Version: 1.4.0
+Tasks: 16/22 done, 0 active, 0 blocked
+
+### Memory tail
+Decisions (5):
+- #14 Мы ДОПОЛНЕНИЕ к Folia, не конкурент. Ось «системы × компоненты» свободна: Folia и MCMT к ней не имеют доступа В ПРИНЦИПЕ
+- #13 roadmap ОБЯЗАН показывать эпик/стори, помеченный done при живых детях (вариант (б) по AC #3), а не полагаться на то, что
+- #12 Гейт «нет регресса» строится на par, а НЕ на speedup. Sp = ref/par остаётся для заголовочного утверждения («модель даёт 
+- #11 Ключ упорядочивания apply = (systemOrder, archMask, chunkIndex) по БУФЕРАМ. Обещанный контрактом §5 ключ (systemOrder, e
+- #10 Протокол замера УСИЛЕН поверх decision #4: стороны ЧЕРЕДУЮТСЯ (after, before, after, before), а не идут блоками; перед к
+Conventions (1):
+- #22 Тест, прошедший с первого раза, проверяется НАМЕРЕННОЙ мутацией — иначе он не доказательство
+Dead ends (3):
+- #34 Считать .gitignore механической защитой от коммита кода Mojang — «git add -f не пройдёт»
+- #33 Folia НЕ держит совместимость плагинов — аргумент «свобода от Bukkit API» ложен
+- #29 Фильтровать «живых детей» по `t.status!='done' AND t.archived_at IS NULL` — защита от того, что архи
 <!-- DYNAMIC:END -->
