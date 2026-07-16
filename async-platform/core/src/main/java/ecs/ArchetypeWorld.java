@@ -16,17 +16,28 @@ public final class ArchetypeWorld {
     public final ComponentRegistry reg;
     private final List<ArchetypeStore> stores = new ArrayList<>();
 
-    // entityId → индекс в stores (-1 = не создан) и localRow внутри него.
-    private int[] entityStore;
-    private int[] entityRow;
+    /**
+     * entityId → локация, УПАКОВАННАЯ в один long: (индекс в stores << 32) | localRow.
+     * Одна карта, а не две (entityStore[] + entityRow[]) — потому что применение команд на барьере
+     * резолвит цель случайным доступом (хоппер шлёт ~50k/тик), и две карты по 600КБ стоили ДВУХ
+     * зависимых промахов кэша на команду вместо одного. Это серийная фаза, Амдаль наказывает её
+     * вдвойне (замер сессии #4). Индирекция как таковая неустранима: стабильный id в archetype-модели
+     * перестал быть номером строки — но платить за неё дважды не обязательно.
+     */
+    private long[] entityLoc;
     private int entityCount;
+
+    private static final long UNPLACED = -1L;
+
+    private static long pack(int storeIdx, int row) { return ((long) storeIdx << 32) | (row & 0xFFFFFFFFL); }
+    static int storeIdxOf(long loc) { return (int) (loc >>> 32); }
+    static int rowOfLoc(long loc)   { return (int) loc; }
 
     public ArchetypeWorld(ComponentRegistry reg, int expectedEntities) {
         this.reg = reg;
         int cap = Math.max(1, expectedEntities);
-        entityStore = new int[cap];
-        entityRow = new int[cap];
-        Arrays.fill(entityStore, -1);
+        entityLoc = new long[cap];
+        Arrays.fill(entityLoc, UNPLACED);
     }
 
     public int entityCount() { return entityCount; }
@@ -43,9 +54,15 @@ public final class ArchetypeWorld {
     public ArchetypeStore store(long mask) { return stores.get(storeIndex(mask)); }
     public ArchetypeStore storeAt(int index) { return stores.get(index); }
 
-    public ArchetypeStore storeOf(int entityId) { return stores.get(entityStore[checkAlive(entityId)]); }
-    public int storeIndexOf(int entityId) { return entityStore[checkAlive(entityId)]; }
-    public int rowOf(int entityId) { return entityRow[checkAlive(entityId)]; }
+    public ArchetypeStore storeOf(int entityId) { return stores.get(storeIdxOf(entityLoc[checkAlive(entityId)])); }
+    public int storeIndexOf(int entityId) { return storeIdxOf(entityLoc[checkAlive(entityId)]); }
+    public int rowOf(int entityId) { return rowOfLoc(entityLoc[checkAlive(entityId)]); }
+
+    // Быстрый путь applyOrdered — единственный горячий серийный резолв в системе. Публичные
+    // storeOf/rowOf на команду дают двойной checkAlive + ArrayList.get с checkcast; здесь
+    // вызывающий берёт карту один раз и платит один индекс на команду.
+    // Пакетный, не API: снаружи резолв обязан идти через проверяющие storeOf/rowOf.
+    long[] entityLocMap() { return entityLoc; }
 
     /**
      * Создаёт энтити в архетипе mask, возвращает СТАБИЛЬНЫЙ entityId.
@@ -56,34 +73,53 @@ public final class ArchetypeWorld {
         int id = entityCount++;
         ensureCapacity(id + 1);
         int si = storeIndex(mask);
-        entityStore[id] = si;
-        entityRow[id] = stores.get(si).addRow(id);
+        entityLoc[id] = pack(si, stores.get(si).addRow(id));
         return id;
     }
+
+    /**
+     * ИНВАРИАНТ C: пока стадия исполняется, карта архетип→строки ЗАМОРОЖЕНА.
+     * На нём стоит корректность планировщика: он пустил системы параллельно, доказав, что их
+     * архетипы не пересекаются, и системы читают соседей по localRow (MobSense — 16 чтений на моба).
+     * Переставь строку под ними — и оба факта разом станут ложью, ТИХО. Поэтому строки двигаются
+     * только на барьере, а нарушение обязано падать громко, а не портить данные.
+     *
+     * volatile: флаг ставит главный поток, читают рабочие. Формально happens-before уже даёт сама
+     * отправка задач в пул, но флаг — часть контракта, а не оптимизация; цена нулевая (раз на стадию).
+     */
+    private volatile boolean rowsFrozen;
+
+    void freezeRows() { rowsFrozen = true; }
+    void thawRows()   { rowsFrozen = false; }
+    public boolean rowsFrozen() { return rowsFrozen; }
 
     /**
      * Смена архетипа: swap-remove из старого + append в новый, общие компоненты переносятся.
      * ПЕРЕСТАВЛЯЕТ СТРОКИ — переехавшему соседу чинится карта. Именно поэтому checksum обязан
      * ключеваться на entityId, а не на индексе строки (иначе перестановка = ложное расхождение).
+     * Разрешена ТОЛЬКО на барьере — см. инвариант C выше.
      */
     public void migrate(int entityId, long newMask) {
+        if (rowsFrozen)
+            throw new ContractViolation("migrate(" + entityId + ") внутри исполняющейся стадии: "
+                    + "строки заморожены до барьера (инвариант C). Структурные изменения — только в apply.");
         int id = checkAlive(entityId);
-        int oldIdx = entityStore[id];
+        long loc = entityLoc[id];
+        int oldIdx = storeIdxOf(loc);
         ArchetypeStore old = stores.get(oldIdx);
         if (old.mask == newMask) return;
 
         int newIdx = storeIndex(newMask);
         ArchetypeStore dst = stores.get(newIdx);
-        int oldRow = entityRow[id];
+        int oldRow = rowOfLoc(loc);
 
         int dstRow = dst.addRow(id);
         old.copyRowTo(oldRow, dst, dstRow);
 
         int moved = old.swapRemove(oldRow);
-        if (moved >= 0) entityRow[moved] = oldRow; // переехавший занял освободившуюся строку
+        if (moved >= 0) entityLoc[moved] = pack(oldIdx, oldRow); // переехавший занял освободившуюся строку
 
-        entityStore[id] = newIdx;
-        entityRow[id] = dstRow;
+        entityLoc[id] = pack(newIdx, dstRow);
     }
 
     /**
@@ -95,10 +131,11 @@ public final class ArchetypeWorld {
     public long checksum() {
         long h = 1125899906842597L;
         for (int id = 0; id < entityCount; id++) {
-            int si = entityStore[id];
+            long loc = entityLoc[id];
+            int si = storeIdxOf(loc);
             if (si < 0) continue;
             ArchetypeStore s = stores.get(si);
-            int row = entityRow[id];
+            int row = rowOfLoc(loc);
             h = 31 * h + id;
             h = 31 * h + s.mask; // архетип — часть состояния: смена набора компонентов видна в хеше
             for (int c = 0; c < reg.count(); c++) {
@@ -122,8 +159,7 @@ public final class ArchetypeWorld {
         ArchetypeWorld w = new ArchetypeWorld(reg, Math.max(1, entityCount));
         for (ArchetypeStore s : stores) w.stores.add(s.copy());
         w.ensureCapacity(Math.max(1, entityCount));
-        System.arraycopy(entityStore, 0, w.entityStore, 0, entityCount);
-        System.arraycopy(entityRow, 0, w.entityRow, 0, entityCount);
+        System.arraycopy(entityLoc, 0, w.entityLoc, 0, entityCount);
         w.entityCount = entityCount;
         return w;
     }
@@ -131,17 +167,16 @@ public final class ArchetypeWorld {
     private int checkAlive(int entityId) {
         if (entityId < 0 || entityId >= entityCount)
             throw new IndexOutOfBoundsException("entityId=" + entityId + " count=" + entityCount);
-        if (entityStore[entityId] < 0)
+        if (storeIdxOf(entityLoc[entityId]) < 0)
             throw new IllegalStateException("entityId=" + entityId + " не размещён в архетипе");
         return entityId;
     }
 
     private void ensureCapacity(int need) {
-        if (need <= entityStore.length) return;
-        int cap = Math.max(need, entityStore.length * 2);
-        int from = entityStore.length;
-        entityStore = Arrays.copyOf(entityStore, cap);
-        entityRow = Arrays.copyOf(entityRow, cap);
-        Arrays.fill(entityStore, from, cap, -1);
+        if (need <= entityLoc.length) return;
+        int cap = Math.max(need, entityLoc.length * 2);
+        int from = entityLoc.length;
+        entityLoc = Arrays.copyOf(entityLoc, cap);
+        Arrays.fill(entityLoc, from, cap, UNPLACED);
     }
 }

@@ -86,16 +86,21 @@ public final class Scheduler {
     public void runReference(ArchetypeWorld world) {
         for (int[] stage : stages) {
             List<CommandBuffer> buffers = new ArrayList<>();
-            for (int si : stage) {
-                GameSystem s = systems.get(si);
-                for (int a = 0; a < world.storeCount(); a++) {
-                    if (!matched[si][a]) continue;
-                    ArchetypeStore st = world.storeAt(a);
-                    View v = new View(world.reg).bind(st, s.reads(), s.writes());
-                    CommandBuffer cb = new CommandBuffer(si, st.mask, 0);
-                    for (int row = 0; row < st.size(); row++) s.run(v, row, cb);
-                    buffers.add(cb);
+            world.freezeRows(); // инвариант C — заморозка и в эталоне тоже, иначе контракт зависел бы от режима
+            try {
+                for (int si : stage) {
+                    GameSystem s = systems.get(si);
+                    for (int a = 0; a < world.storeCount(); a++) {
+                        if (!matched[si][a]) continue;
+                        ArchetypeStore st = world.storeAt(a);
+                        View v = new View(world.reg).bind(st, s.reads(), s.writes());
+                        CommandBuffer cb = new CommandBuffer(si, st.mask, 0);
+                        for (int row = 0; row < st.size(); row++) s.run(v, row, cb);
+                        buffers.add(cb);
+                    }
                 }
+            } finally {
+                world.thawRows();
             }
             applyOrdered(world, buffers);
         }
@@ -125,9 +130,14 @@ public final class Scheduler {
                     }
                 }
             }
-            List<Future<CommandBuffer>> fs = pool.invokeAll(tasks);
-            List<CommandBuffer> buffers = new ArrayList<>(fs.size());
-            for (Future<CommandBuffer> f : fs) buffers.add(f.get());
+            List<CommandBuffer> buffers = new ArrayList<>(tasks.size());
+            world.freezeRows(); // инвариант C: пока задачи бегут, строки под ними двигать нельзя
+            try {
+                List<Future<CommandBuffer>> fs = pool.invokeAll(tasks);
+                for (Future<CommandBuffer> f : fs) buffers.add(f.get());
+            } finally {
+                world.thawRows();
+            }
             applyOrdered(world, buffers);
         }
     }
@@ -148,7 +158,10 @@ public final class Scheduler {
      * архетипов (сортируем по МАСКЕ, а не по индексу store) → детерминизм.
      *
      * Единственное место cross-archetype доступа: цель — стабильный entityId, резолвится здесь,
-     * на барьере, где индирекция дёшева (команд мало относительно полезной работы).
+     * на барьере. Карту и колонки берём РАЗ НА БАРЬЕР, а не на каждую из ~50k команд — вот это
+     * замер сессии #4 подтвердил как реальный выигрыш. А вот перенос самого резолва в эмиссию
+     * выигрыша НЕ дал и откачен: итерации apply независимы, промахи перекрываются внеочередным
+     * исполнением, латентность здесь не узкое место.
      */
     static void applyOrdered(ArchetypeWorld world, List<CommandBuffer> buffers) {
         buffers.sort((a, b) -> {
@@ -157,11 +170,24 @@ public final class Scheduler {
             return Integer.compare(a.chunkIndex, b.chunkIndex);
         });
         int arity = world.reg.arity(Components.INVENTORY);
+
+        // Карту и колонки берём ОДИН раз на барьер, а не на каждую из ~50k команд: резолв здесь
+        // серийный, поэтому Амдаль наказывает его вдвойне. Колонка на индекс архетипа — их единицы.
+        long[] eLoc = world.entityLocMap();
+        int[][] invByStore = new int[world.storeCount()][];
+        for (int a = 0; a < invByStore.length; a++) invByStore[a] = world.storeAt(a).intCol(Components.INVENTORY);
+
         for (CommandBuffer cb : buffers) {
             for (int i = 0; i < cb.n; i++) {
-                int e = cb.entity[i];
-                int[] col = world.storeOf(e).intCol(Components.INVENTORY);
-                int idx = world.rowOf(e) * arity + cb.slot[i];
+                long loc = eLoc[cb.entity[i]]; // одна карта → один доступ к ней на команду, не два
+                int si = ArchetypeWorld.storeIdxOf(loc);
+                if (si < 0)
+                    throw new IllegalStateException("команда на неразмещённую энтити e=" + cb.entity[i]);
+                int[] col = invByStore[si];
+                if (col == null)
+                    throw new IllegalStateException("команда в INVENTORY на архетип без него: e=" + cb.entity[i]
+                            + " маска=" + Long.toBinaryString(world.storeAt(si).mask));
+                int idx = ArchetypeWorld.rowOfLoc(loc) * arity + cb.slot[i];
                 switch (cb.op[i]) {
                     case CommandBuffer.OP_ADD -> col[idx] += (int) cb.value[i];
                     case CommandBuffer.OP_SET -> col[idx]  = (int) cb.value[i];
