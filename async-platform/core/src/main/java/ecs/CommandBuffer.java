@@ -89,6 +89,11 @@ public final class CommandBuffer {
      */
     public void init(int target, int comp, int lane, long v) { spush(OP_INIT, target, comp, lane, v); }
 
+    /** То же для DOUBLE-колонок: значение едет битами, чтобы поток остался одним long[]. */
+    public void initDouble(int target, int comp, int lane, double v) {
+        spush(OP_INIT, target, comp, lane, Double.doubleToLongBits(v));
+    }
+
     public void destroy(int target)                  { spush(OP_DESTROY, target, 0, 0, 0); }
     public void addComponent(int target, int comp)   { spush(OP_ADD_COMPONENT, target, comp, 0, 0); }
     public void removeComponent(int target, int comp){ spush(OP_REMOVE_COMPONENT, target, comp, 0, 0); }
