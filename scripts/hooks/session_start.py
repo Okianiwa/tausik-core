@@ -146,7 +146,7 @@ def _rag_summary(project_dir: str) -> str:
         import sqlite3
 
         with sqlite3.connect(rag_db) as conn:
-            row = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()
+            row = conn.execute("SELECT COUNT(*) FROM rag_chunks").fetchone()
             chunks = int(row[0]) if row else 0
     except Exception:
         return "RAG: status unknown (db unreadable)."
