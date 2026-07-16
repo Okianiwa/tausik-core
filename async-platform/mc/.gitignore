@@ -14,6 +14,8 @@
 !README.md
 !setup_mc_server.py
 !tick_probe.py
+!perf_parse.py
+!mc_session.py
 !prior-art-folia-mcmt.md
 !tick-profile.md
 
