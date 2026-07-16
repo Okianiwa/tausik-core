@@ -66,5 +66,6 @@ CLI: ВСЕГДА `.tausik/tausik <команда>`. НИКОГДА `python scri
 <!-- DYNAMIC:START -->
 ## Current State
 Session: none | Branch: feat/core-rewrite-blockentity-slice | Version: 1.4.0
-Tasks: 11/15 done, 0 active, 0 blocked
+Tasks: 11/15 done, 0 active, 1 blocked
+Blocked: structural-changes-benchmark
 <!-- DYNAMIC:END -->
