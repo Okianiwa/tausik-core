@@ -219,16 +219,43 @@ public final class Scheduler {
      * здесь ещё жива — эффект на неё применяется безвредно и уходит вместе со строкой. А e, удалённая
      * в ПРЕДЫДУЩЕМ барьере, имеет UNPLACED → бросок ниже. Громко, без единой новой проверки.
      */
+    /**
+     * Страйд таблицы колонок — КОНСТАНТА-степень двойки, а не живой reg.count(), и это ЗАМЕРЕНО.
+     * При переменном страйде индекс si*comps+comp требует НАСТОЯЩЕГО IMUL, и его задержка ложится
+     * на путь вычисления адреса загрузки colTab[...]; при константном сдвиг сворачивается в
+     * адресацию. Разложение абляциями на сцене блок-энтити (par work=0, ~100k команд/тик):
+     *   индекс si*comps+comp .... 0.040 мс  (89% цены дженерик-адресации)
+     *   загрузка arityOf[comp] .. 0.0025 мс (ноль: ниже разрешения стенда)
+     *   извлечение compOf(pk) ... 0.0025 мс (ноль)
+     * Показательно, что compOf — тоже две инструкции, но стоит в 16 раз меньше: платит не их
+     * количество, а зависимость АДРЕСА загрузки от результата IMUL.
+     *
+     * Цена решения: таблица storeCount*64 ссылок вместо storeCount*comps (~768 Б против ~120 Б на
+     * трёх архетипах). Всё равно L1, строится раз на барьер, трогаются единицы строк.
+     */
+    private static final int COL_SHIFT = 6;
+    private static final int COL_STRIDE = 1 << COL_SHIFT;
+
+    static {
+        // Страйд и потолок компонентов связаны ЖЁСТКО: подними MAX_COMPONENTS выше страйда — и comp
+        // переполнится в биты si, а эффект МОЛЧА уедет в колонку чужого архетипа. Падаем здесь, при
+        // загрузке класса, а не через сутки в проде на испорченном инвентаре.
+        if (ComponentRegistry.MAX_COMPONENTS > COL_STRIDE)
+            throw new IllegalStateException("COL_STRIDE=" + COL_STRIDE + " меньше потолка компонентов "
+                    + ComponentRegistry.MAX_COMPONENTS + ": индекс (si << " + COL_SHIFT + ") | comp"
+                    + " переполнит comp в биты архетипа. Поднял потолок — подними и COL_SHIFT.");
+    }
+
     private static void applyEffects(ArchetypeWorld world, List<CommandBuffer> buffers) {
         long[] eLoc = world.entityLocMap();
         int comps = world.reg.count();
         // Плоская таблица [архетип][компонент] → INT-колонка. Плоская, а не вложенная: в серийном
         // цикле это ОДНА индирекция на команду, как и прежний invByStore. Архетипов и компонентов
         // единицы-десятки, таблица строится раз на барьер.
-        int[][] colTab = new int[world.storeCount() * comps][];
+        int[][] colTab = new int[world.storeCount() << COL_SHIFT][];
         for (int a = 0; a < world.storeCount(); a++) {
             ArchetypeStore st = world.storeAt(a);
-            for (int c = 0; c < comps; c++) colTab[a * comps + c] = st.intCol(c);
+            for (int c = 0; c < comps; c++) colTab[(a << COL_SHIFT) | c] = st.intCol(c);
         }
         // Арность — тоже РАЗ НА БАРЬЕР. Прежний код держал её в локальной переменной, потому что
         // компонент был один; при дженерик-адресации reg.arity(comp) в цикле стал бы вызовом с
@@ -247,7 +274,7 @@ public final class Scheduler {
                 // стоили 0.042 мс на тик (замер среза 7). См. раскладку в CommandBuffer.
                 int pk = cb.packed[i];
                 int comp = CommandBuffer.compOf(pk);
-                int[] col = colTab[si * comps + comp];
+                int[] col = colTab[(si << COL_SHIFT) | comp];
                 if (col == null)
                     throw new IllegalStateException("эффект на компонент без INT-колонки в архетипе: e="
                             + cb.entity[i] + " комп=" + world.reg.name(comp)
