@@ -39,20 +39,46 @@ public final class CommandBuffer {
     public final long archMask;
     public final int chunkIndex;
 
-    // --- поток ЭФФЕКТОВ (горячий: ~50k команд/тик у хоппера) ---
-    int[] op     = new int[8];
+    /*
+     * --- поток ЭФФЕКТОВ (горячий: ~50k команд/тик у хоппера) ---
+     *
+     * op, comp и slot едут В ОДНОМ int, а не тремя массивами, и это ЗАМЕРЕНО, а не вкусовщина.
+     * Дженериковость командного пути (буфер обязан нести id компонента — иначе не init'ить
+     * произвольный компонент) стоила на срезе 7 +0.092 мс серийной apply на тик, из которых
+     * 0.042 мс — ровно отдельный массив comp[]: лишняя запись на каждую из ~50k команд плюс
+     * лишний массив в копировании при росте буфера (8→8k = 10 удвоений за тик). Упаковка
+     * снимает это целиком: потоков 3 (packed, entity, value) вместо 5, и даже меньше, чем было
+     * ДО дженериковости (4). В apply — одна загрузка и три сдвига вместо трёх загрузок.
+     *
+     * Раскладка: op в битах 24+, comp в 16..23, slot в 0..15. Ширины с запасом на порядок:
+     * comp < 64 by construction (маски архетипа — биты long), slot — индекс ячейки инвентаря
+     * либо lane компонента, единицы. Выход за диапазон ловится в push() ГРОМКО: молчаливое
+     * переполнение здесь испортило бы чужую строку, а не упало.
+     */
+    int[] packed = new int[8];
     int[] entity = new int[8];  // СТАБИЛЬНЫЙ entityId: apply резолвит его в (архетип, строку)
-    int[] comp   = new int[8];  // id компонента: было захардкожено INVENTORY в applyOrdered
-    int[] slot   = new int[8];
     long[] value = new long[8];
     int n = 0;
 
-    // --- поток СТРУКТУРНЫХ (холодный: единицы-десятки за барьер) ---
-    int[] sop      = new int[4];
-    int[] starget  = new int[4];  // entityId (>=0) либо дескриптор (<0), см. newHandle()
-    int[] scomp    = new int[4];
-    int[] sslot    = new int[4];
-    long[] svalue  = new long[4]; // OP_CREATE: маска архетипа; OP_INIT: значение
+    private static final int COMP_SHIFT = 16, OP_SHIFT = 24;
+    private static final int SLOT_MASK = 0xFFFF, COMP_MASK = 0xFF;
+
+    static int opOf(int packed)   { return packed >>> OP_SHIFT; }
+    static int compOf(int packed) { return (packed >>> COMP_SHIFT) & COMP_MASK; }
+    static int slotOf(int packed) { return packed & SLOT_MASK; }
+
+    /*
+     * --- поток СТРУКТУРНЫХ (холодный: единицы-десятки за барьер) ---
+     *
+     * ЛЕНИВЫЙ: массивы рождаются при первой структурной команде, а не в конструкторе. Это НЕ
+     * оптимизация — ЗАМЕРЕНО, выигрыш НОЛЬ (par work=0: 0.553 → 0.548 при ±0.019, то есть ниже
+     * разрешения стенда). Сделано ради ЧЕСТНОСТИ УТВЕРЖДЕНИЯ: комментарий фазы S обещает, что
+     * «сцены без структурной текучки не платят здесь НИЧЕГО», а при жадной аллокации сцена без
+     * единого create платила 5 массивов на КАЖДЫЙ буфер — обещание было ложью, пусть и дешёвой.
+     * Не искать здесь ускорения: остаток регресса среза 7 (+0.033 мс par) сидит НЕ ТУТ.
+     */
+    int[] sop, starget, scomp, sslot;  // starget: entityId (>=0) либо дескриптор (<0), см. newHandle()
+    long[] svalue;                     // OP_CREATE: маска архетипа; OP_INIT: значение
     int sn = 0;
 
     private int handles = 0;
@@ -107,19 +133,28 @@ public final class CommandBuffer {
     int handleCount() { return handles; }
 
     private void push(int o, int e, int c, int s, long v) {
-        if (n == op.length) {
+        // Гард диапазона — на горячем пути, но это предсказуемая ветка против ТИХОЙ порчи чужой
+        // строки: переполнись slot в биты comp, и эффект уедет в другой компонент без единого следа.
+        if ((c & ~COMP_MASK) != 0 || (s & ~SLOT_MASK) != 0)
+            throw new IllegalArgumentException("не влезает в упакованную команду: комп=" + c
+                    + " (макс " + COMP_MASK + "), slot=" + s + " (макс " + SLOT_MASK + ")");
+        if (n == packed.length) {
             int cap = n * 2;
-            op = Arrays.copyOf(op, cap);
+            packed = Arrays.copyOf(packed, cap);
             entity = Arrays.copyOf(entity, cap);
-            comp = Arrays.copyOf(comp, cap);
-            slot = Arrays.copyOf(slot, cap);
             value = Arrays.copyOf(value, cap);
         }
-        op[n] = o; entity[n] = e; comp[n] = c; slot[n] = s; value[n] = v; n++;
+        packed[n] = (o << OP_SHIFT) | (c << COMP_SHIFT) | s;
+        entity[n] = e;
+        value[n] = v;
+        n++;
     }
 
     private void spush(int o, int t, int c, int s, long v) {
-        if (sn == sop.length) {
+        if (sop == null) {
+            sop = new int[4]; starget = new int[4]; scomp = new int[4]; sslot = new int[4];
+            svalue = new long[4];
+        } else if (sn == sop.length) {
             int cap = sn * 2;
             sop = Arrays.copyOf(sop, cap);
             starget = Arrays.copyOf(starget, cap);

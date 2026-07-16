@@ -243,14 +243,17 @@ public final class Scheduler {
                 int si = ArchetypeWorld.storeIdxOf(loc);
                 if (si < 0)
                     throw new IllegalStateException("команда на неразмещённую энтити e=" + cb.entity[i]);
-                int comp = cb.comp[i];
+                // Одна загрузка на op+comp+slot, дальше сдвиги в регистре: три отдельных массива
+                // стоили 0.042 мс на тик (замер среза 7). См. раскладку в CommandBuffer.
+                int pk = cb.packed[i];
+                int comp = CommandBuffer.compOf(pk);
                 int[] col = colTab[si * comps + comp];
                 if (col == null)
                     throw new IllegalStateException("эффект на компонент без INT-колонки в архетипе: e="
                             + cb.entity[i] + " комп=" + world.reg.name(comp)
                             + " маска=" + Long.toBinaryString(world.storeAt(si).mask));
-                int idx = ArchetypeWorld.rowOfLoc(loc) * arityOf[comp] + cb.slot[i];
-                switch (cb.op[i]) {
+                int idx = ArchetypeWorld.rowOfLoc(loc) * arityOf[comp] + CommandBuffer.slotOf(pk);
+                switch (CommandBuffer.opOf(pk)) {
                     case CommandBuffer.OP_ADD -> col[idx] += (int) cb.value[i];
                     case CommandBuffer.OP_SET -> col[idx]  = (int) cb.value[i];
                 }
