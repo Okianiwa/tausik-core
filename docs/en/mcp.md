@@ -2,9 +2,9 @@
 
 # TAUSIK MCP — Tool Reference (v1.4)
 
-**103 tools** for AI agents (96 project + 7 brain; v1.4 actual count, asserted via `len(TOOLS)` on both servers). The MCP surface mirrors the CLI 1:1 with zero CLI-only gaps. Prefer MCP tools over shell calls — they are atomic, return structured data, and keep your context cleaner.
+**105 tools** for AI agents (98 project + 7 brain; v1.4 actual count, asserted via `len(TOOLS)` on both servers). The MCP surface mirrors the CLI 1:1 with zero CLI-only gaps. Prefer MCP tools over shell calls — they are atomic, return structured data, and keep your context cleaner.
 
-> **Optional `codebase-rag` server** adds 7 tools (search_code, find_symbol, …). It is enabled separately during bootstrap and is NOT part of the main 103 count — total with it is 110 tools.
+> **Optional `codebase-rag` server** adds 7 tools (search_code, find_symbol, …). It is enabled separately during bootstrap and is NOT part of the main 105 count — total with it is 112 tools.
 
 Two MCP servers live in this project:
 
@@ -103,13 +103,15 @@ Session limit is gap-based **active time** (paused after 10-min idle gap), not w
 |---|---|---|
 | `tausik_epic_add` | Create epic | `slug`, `title` |
 | `tausik_epic_list` | List epics | — |
-| `tausik_epic_done` | Complete epic | `slug` |
+| `tausik_epic_done` | Complete epic. Refused if live stories/tasks remain (named in the error); `force` overrides and the roadmap flags it | `slug`, `force` |
+| `tausik_epic_reopen` | Reopen a done epic (→ active), without delete | `slug` |
 | `tausik_epic_delete` | Delete (cascade: stories + tasks) | `slug` |
 | `tausik_story_add` | Create story in epic | `epic_slug`, `slug`, `title` |
 | `tausik_story_list` | List stories | — |
-| `tausik_story_done` | Complete story | `slug` |
+| `tausik_story_done` | Complete story. Refused if live tasks remain (named in the error); `force` overrides and the roadmap flags it | `slug`, `force` |
+| `tausik_story_reopen` | Reopen a done story (→ active), without delete | `slug` |
 | `tausik_story_delete` | Delete (cascade: tasks) | `slug` |
-| `tausik_roadmap` | Tree: epic → story → task | — |
+| `tausik_roadmap` | Tree: epic → story → task. An epic/story marked done while children are still live is always shown and flagged ⚠, even without `include_done` | `include_done` |
 
 ## Knowledge
 

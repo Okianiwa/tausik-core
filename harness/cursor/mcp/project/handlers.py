@@ -483,11 +483,17 @@ _DISPATCH: dict[str, _Handler] = {
         args["slug"], args["title"], args.get("description")
     ),
     "tausik_epic_list": _do_epic_list,
-    "tausik_epic_done": lambda svc, args: svc.epic_done(args["slug"]),
+    "tausik_epic_done": lambda svc, args: svc.epic_done(
+        args["slug"], force=args.get("force", False)
+    ),
+    "tausik_epic_reopen": lambda svc, args: svc.epic_reopen(args["slug"]),
     "tausik_epic_delete": lambda svc, args: svc.epic_delete(args["slug"]),
     "tausik_story_add": _do_story_add,
     "tausik_story_list": _do_story_list,
-    "tausik_story_done": lambda svc, args: svc.story_done(args["slug"]),
+    "tausik_story_done": lambda svc, args: svc.story_done(
+        args["slug"], force=args.get("force", False)
+    ),
+    "tausik_story_reopen": lambda svc, args: svc.story_reopen(args["slug"]),
     "tausik_story_delete": lambda svc, args: svc.story_delete(args["slug"]),
     "tausik_roadmap": lambda svc, args: _handle_roadmap(svc, args),
     # --- Knowledge (Memory) ---
@@ -1072,17 +1078,32 @@ def _handle_task_show(svc: Any, args: dict) -> str:
     return "\n".join(lines)
 
 
+_INCONSISTENT_MARK = "  ⚠ MARKED DONE BUT HAS LIVE CHILDREN"
+
+
 def _handle_roadmap(svc: Any, args: dict) -> str:
     data = svc.get_roadmap(args.get("include_done", False))
     if not data:
         return "No epics."
     lines = []
+    bad: list[str] = []
     for epic in data:
-        lines.append(f"[{epic['status']}] {epic['slug']}: {epic['title']}")
+        mark = _INCONSISTENT_MARK if epic.get("inconsistent") else ""
+        if mark:
+            bad.append(f"epic '{epic['slug']}'")
+        lines.append(f"[{epic['status']}] {epic['slug']}: {epic['title']}{mark}")
         for story in epic.get("stories", []):
-            lines.append(f"  [{story['status']}] {story['slug']}: {story['title']}")
+            s_mark = _INCONSISTENT_MARK if story.get("inconsistent") else ""
+            if s_mark:
+                bad.append(f"story '{story['slug']}'")
+            lines.append(f"  [{story['status']}] {story['slug']}: {story['title']}{s_mark}")
             for task in story.get("tasks", []):
                 lines.append(f"    [{task['status']}] {task['slug']}: {task['title']}")
+    if bad:
+        lines.append(
+            f"\nWARNING: {', '.join(bad)} marked done while children are still live.\n"
+            "Reopen: tausik_epic_reopen / tausik_story_reopen"
+        )
     return "\n".join(lines)
 
 

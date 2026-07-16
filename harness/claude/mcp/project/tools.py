@@ -460,7 +460,26 @@ TOOLS = [
     },
     {
         "name": "tausik_epic_done",
-        "description": "Mark epic as done",
+        "description": (
+            "Mark epic as done. Refused if the epic still has live (not-done) stories or "
+            "tasks — they are named in the error. Pass force=true to override; the roadmap "
+            "then flags the epic as inconsistent."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "slug": {"type": "string"},
+                "force": {
+                    "type": "boolean",
+                    "description": "Mark done despite live children",
+                },
+            },
+            "required": ["slug"],
+        },
+    },
+    {
+        "name": "tausik_epic_reopen",
+        "description": "Reopen a done epic (status -> active). Undoes epic_done without delete",
         "inputSchema": {
             "type": "object",
             "properties": {"slug": {"type": "string"}},
@@ -478,7 +497,26 @@ TOOLS = [
     },
     {
         "name": "tausik_story_done",
-        "description": "Mark story as done",
+        "description": (
+            "Mark story as done. Refused if the story still has live (not-done) tasks — "
+            "they are named in the error. Pass force=true to override; the roadmap then "
+            "flags the story as inconsistent."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "slug": {"type": "string"},
+                "force": {
+                    "type": "boolean",
+                    "description": "Mark done despite live tasks",
+                },
+            },
+            "required": ["slug"],
+        },
+    },
+    {
+        "name": "tausik_story_reopen",
+        "description": "Reopen a done story (status -> active). Undoes story_done without delete",
         "inputSchema": {
             "type": "object",
             "properties": {"slug": {"type": "string"}},

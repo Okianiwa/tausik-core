@@ -155,11 +155,13 @@ def cmd_epic(svc: ProjectService, args: Any) -> None:
     elif args.epic_cmd == "list":
         _print_table(svc.epic_list(), ["slug", "title", "status"])
     elif args.epic_cmd == "done":
-        print(svc.epic_done(args.slug))
+        print(svc.epic_done(args.slug, force=args.force))
+    elif args.epic_cmd == "reopen":
+        print(svc.epic_reopen(args.slug))
     elif args.epic_cmd == "delete":
         print(svc.epic_delete(args.slug))
     else:
-        print("Usage: tausik epic [add|list|done|delete]")
+        print("Usage: tausik epic [add|list|done|reopen|delete]")
 
 
 def cmd_story(svc: ProjectService, args: Any) -> None:
@@ -168,11 +170,13 @@ def cmd_story(svc: ProjectService, args: Any) -> None:
     elif args.story_cmd == "list":
         _print_table(svc.story_list(args.epic), ["slug", "title", "status", "epic_slug"])
     elif args.story_cmd == "done":
-        print(svc.story_done(args.slug))
+        print(svc.story_done(args.slug, force=args.force))
+    elif args.story_cmd == "reopen":
+        print(svc.story_reopen(args.slug))
     elif args.story_cmd == "delete":
         print(svc.story_delete(args.slug))
     else:
-        print("Usage: tausik story [add|list|done|delete]")
+        print("Usage: tausik story [add|list|done|reopen|delete]")
 
 
 # cmd_task -> moved to project_cli_task.py (filesize-debt-paydown-2)
@@ -238,17 +242,32 @@ def cmd_decisions(svc: ProjectService, args: Any) -> None:
     _print_table(svc.decisions(args.limit), ["id", "decision", "task_slug", "created_at"])
 
 
+_INCONSISTENT_MARK = "  ⚠ MARKED DONE BUT HAS LIVE CHILDREN"
+
+
 def cmd_roadmap(svc: ProjectService, args: Any) -> None:
     data = svc.get_roadmap(args.include_done)
     if not data:
         print("No epics.")
         return
+    bad: list[str] = []
     for epic in data:
-        print(f"[{epic['status']}] {epic['slug']}: {epic['title']}")
+        mark = _INCONSISTENT_MARK if epic.get("inconsistent") else ""
+        if mark:
+            bad.append(f"epic '{epic['slug']}'")
+        print(f"[{epic['status']}] {epic['slug']}: {epic['title']}{mark}")
         for story in epic.get("stories", []):
-            print(f"  [{story['status']}] {story['slug']}: {story['title']}")
+            s_mark = _INCONSISTENT_MARK if story.get("inconsistent") else ""
+            if s_mark:
+                bad.append(f"story '{story['slug']}'")
+            print(f"  [{story['status']}] {story['slug']}: {story['title']}{s_mark}")
             for task in story.get("tasks", []):
                 print(f"    [{task['status']}] {task['slug']}: {task['title']}")
+    if bad:
+        print(
+            f"\nWARNING: {', '.join(bad)} marked done while children are still live.\n"
+            "Reopen: tausik epic reopen <slug> / tausik story reopen <slug>"
+        )
 
 
 # cmd_metrics, cmd_search, cmd_events, cmd_dead_end, cmd_explore, cmd_audit, cmd_run

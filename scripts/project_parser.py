@@ -52,6 +52,13 @@ def build_parser() -> argparse.ArgumentParser:
     epic_sub.add_parser("list")
     ed = epic_sub.add_parser("done")
     ed.add_argument("slug")
+    ed.add_argument(
+        "--force",
+        action="store_true",
+        help="Mark done even with live stories/tasks (roadmap will flag it)",
+    )
+    ereo = epic_sub.add_parser("reopen", epilog="Example: tausik epic reopen my-epic")
+    ereo.add_argument("slug")
     edel = epic_sub.add_parser("delete")
     edel.add_argument("slug")
 
@@ -70,6 +77,13 @@ def build_parser() -> argparse.ArgumentParser:
     sl.add_argument("--epic", default=None)
     sd = story_sub.add_parser("done")
     sd.add_argument("slug")
+    sd.add_argument(
+        "--force",
+        action="store_true",
+        help="Mark done even with live tasks (roadmap will flag it)",
+    )
+    sreo = story_sub.add_parser("reopen", epilog="Example: tausik story reopen my-story")
+    sreo.add_argument("slug")
     sdel = story_sub.add_parser("delete")
     sdel.add_argument("slug")
 

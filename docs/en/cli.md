@@ -32,14 +32,22 @@ doctor                         # Health check: venv + DB + MCP + skills + drift
 ```bash
 epic add <slug> <title> [--description TEXT]
 epic list
-epic done <slug>
+epic done <slug> [--force]     # refused if stories/tasks are still live; --force overrides
+epic reopen <slug>             # return a done epic to active (reversible, no delete)
 epic delete <slug>             # CASCADE: deletes all stories + tasks
 
 story add <epic_slug> <slug> <title> [--description TEXT]
 story list [--epic EPIC_SLUG]
-story done <slug>
+story done <slug> [--force]    # refused if tasks are still live; --force overrides
+story reopen <slug>            # return a done story to active (reversible, no delete)
 story delete <slug>            # CASCADE: deletes all tasks
 ```
+
+`done` refuses while children are still open and names them — the same way `task done`
+refuses on unfinished plan steps. `--force` stays for the deliberate case, but the
+"done with live children" state is **never hidden**: `roadmap` always shows such an
+epic/story, even without `--include-done`, and flags it ⚠. No one-way doors — any
+`done` is undone by `reopen`.
 
 ## Tasks
 

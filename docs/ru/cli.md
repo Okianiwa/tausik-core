@@ -32,14 +32,22 @@ doctor                         # Health check: venv + DB + MCP + skills + drift
 ```bash
 epic add <slug> <title> [--description TEXT]
 epic list
-epic done <slug>
+epic done <slug> [--force]     # отказ при живых стори/задачах; --force продавливает
+epic reopen <slug>             # вернуть завершённый эпик в active (обратимо, без delete)
 epic delete <slug>             # CASCADE: удаляет все стори + задачи
 
 story add <epic_slug> <slug> <title> [--description TEXT]
 story list [--epic EPIC_SLUG]
-story done <slug>
+story done <slug> [--force]    # отказ при живых задачах; --force продавливает
+story reopen <slug>            # вернуть завершённую стори в active (обратимо, без delete)
 story delete <slug>            # CASCADE: удаляет все задачи
 ```
+
+`done` отказывает, если внутри есть незакрытые дети, и перечисляет их поимённо — как
+`task done` отказывает при незакрытых шагах плана. `--force` оставлен для осознанного
+случая, но состояние «done при живых детях» **не прячется**: `roadmap` показывает такой
+эпик/стори ВСЕГДА, даже без `--include-done`, и помечает ⚠. Односторонних дверей нет —
+любое `done` откатывается через `reopen`.
 
 ## Задачи
 
