@@ -23,6 +23,9 @@ build/
 # RAG index data (local, machine-specific)
 .rag/
 
+# Local tool state — MCP server config + cache, per-developer
+.serena/
+
 # Generated IDE directories — bootstrap output, not source
 .claude/
 .claude-project/
