@@ -2,7 +2,9 @@ package ecs.bench;
 
 import ecs.RedstoneCascade;
 import ecs.Scheduler;
-import ecs.World;
+import ecs.ArchetypeStore;
+import ecs.ArchetypeWorld;
+import ecs.Components;
 import ecs.scene.RedstoneScene;
 
 import org.openjdk.jmh.annotations.Benchmark;
@@ -39,27 +41,36 @@ public class RedstoneBenchmark {
     public int threads;
 
     private Scheduler sched;
-    private World wRef;
-    private World wPar;
+    private ArchetypeWorld wRef;
+    private ArchetypeWorld wPar;
     private ExecutorService pool;
 
     @Setup(Level.Trial)
     public void setup() {
         wRef = RedstoneScene.build(grid, grid);
         wPar = RedstoneScene.build(grid, grid);
-        sched = new Scheduler(RedstoneScene.systems(), wRef);
+        sched = new Scheduler(RedstoneScene.systems(grid), wRef);
         pool = Executors.newFixedThreadPool(threads);
     }
 
     @Setup(Level.Invocation)
     public void reset() {
-        Arrays.fill(wRef.power, 0); Arrays.fill(wRef.powerNext, 0);
-        Arrays.fill(wPar.power, 0); Arrays.fill(wPar.powerNext, 0);
+        resetPower(wRef);
+        resetPower(wPar);
     }
 
     @TearDown(Level.Trial)
     public void tearDown() {
         pool.shutdownNow();
+    }
+
+    /** Сброс каскада между инвокациями: SOURCE сохраняется, буферы POWER обнуляются. */
+    private static void resetPower(ArchetypeWorld w) {
+        for (ArchetypeStore s : w.stores()) {
+            if (!s.has(Components.POWER)) continue;
+            Arrays.fill(s.intCol(Components.POWER), 0);
+            Arrays.fill(s.intCol(Components.POWER_NEXT), 0);
+        }
     }
 
     @Benchmark

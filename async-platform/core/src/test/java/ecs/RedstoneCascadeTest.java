@@ -14,11 +14,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RedstoneCascadeTest {
 
+    /** POWER клетки по её стабильному entityId. */
+    private static int power(ArchetypeWorld w, int entityId) {
+        return w.storeOf(entityId).intCol(Components.POWER)[w.rowOf(entityId)];
+    }
+
     @Test
     void parallelFixpointMatchesReference() throws Exception {
-        World ref = RedstoneScene.build(200, 200);
-        World par = RedstoneScene.build(200, 200);
-        Scheduler s = new Scheduler(RedstoneScene.systems(), ref);
+        ArchetypeWorld ref = RedstoneScene.build(200, 200);
+        ArchetypeWorld par = RedstoneScene.build(200, 200);
+        Scheduler s = new Scheduler(RedstoneScene.systems(200), ref);
 
         int refPasses = RedstoneCascade.runReference(ref, s);
         ExecutorService pool = Executors.newFixedThreadPool(8);
@@ -35,33 +40,35 @@ class RedstoneCascadeTest {
 
     @Test
     void propagationDecaysByManhattanDistance() {
-        World w = RedstoneScene.build(4, 4); // источник в углу (0,0)
-        Scheduler s = new Scheduler(RedstoneScene.systems(), w);
+        ArchetypeWorld w = RedstoneScene.build(4, 4); // источник в углу (0,0)
+        Scheduler s = new Scheduler(RedstoneScene.systems(4), w);
         RedstoneCascade.runReference(w, s);
-        assertEquals(15, w.power[0], "источник = 15");
-        assertEquals(9, w.power[15], "дальний угол (3,3): manhattan 6 → 15-6=9");
-        assertEquals(14, w.power[1], "сосед (1,0): 14");
+        assertEquals(15, power(w, 0), "источник = 15");
+        assertEquals(9, power(w, 15), "дальний угол (3,3): manhattan 6 → 15-6=9");
+        assertEquals(14, power(w, 1), "сосед (1,0): 14");
     }
 
     @Test
     void undeclaredPowerReadThrows() {
         GameSystem rogue = new GameSystem() {
             public String name() { return "RoguePower"; }
-            public int archetype() { return Archetype.REDSTONE; }
             public long reads()  { return 0; }
             public long writes() { return Components.mask(Components.POWER_NEXT); }
-            public void run(View v, int e, CommandBuffer cb) { v.setPowerNext(e, v.power(e)); }
+            public long query()  { return RedstoneScene.REDSTONE; }
+            public void run(View v, int e, CommandBuffer cb) {
+                v.setInt(Components.POWER_NEXT, e, v.getInt(Components.POWER, e));
+            }
         };
-        World w = RedstoneScene.build(3, 3);
+        ArchetypeWorld w = RedstoneScene.build(3, 3);
         Scheduler s = new Scheduler(List.of(rogue), w);
         assertThrows(ContractViolation.class, () -> s.runReference(w));
     }
 
     @Test
     void emptyGridDoesNotCrash() throws Exception {
-        World ref = RedstoneScene.build(0, 0);
-        World par = RedstoneScene.build(0, 0);
-        Scheduler s = new Scheduler(RedstoneScene.systems(), ref);
+        ArchetypeWorld ref = RedstoneScene.build(0, 0);
+        ArchetypeWorld par = RedstoneScene.build(0, 0);
+        Scheduler s = new Scheduler(RedstoneScene.systems(0), ref);
         ExecutorService pool = Executors.newFixedThreadPool(4);
         try {
             assertDoesNotThrow(() -> RedstoneCascade.runReference(ref, s));

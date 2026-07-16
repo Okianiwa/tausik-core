@@ -17,7 +17,7 @@ class EntitySystemsTest {
 
     @Test
     void dirtyLayoutPacksSenseAndCombatButSplitsMove() {
-        World w = EntityScene.build(N);
+        ArchetypeWorld w = EntityScene.build(N);
         Scheduler s = new Scheduler(EntityScene.systems(), w);
         // Sense+Combat читают POSITION (read∩read, пишут разное) → одна стадия; Move пишет POSITION → отдельно.
         assertEquals(2, s.stages.size(), "грязная подсистема: [Sense,Combat] | [Move]");
@@ -38,20 +38,23 @@ class EntitySystemsTest {
     void neighbourReadWithoutDeclaringPositionThrows() {
         GameSystem rogue = new GameSystem() {
             public String name() { return "RogueNeighbour"; }
-            public int archetype() { return Archetype.MOB; }
             public long reads()  { return 0; }
             public long writes() { return Components.mask(Components.VELOCITY); }
-            public void run(View v, int e, CommandBuffer cb) { v.setVelX(e, v.posX((e + 1) % v.size())); }
+            public long query()  { return EntityScene.MOB; }
+            public void run(View v, int e, CommandBuffer cb) {
+                v.setDouble(Components.VELOCITY, e, Components.LANE_X,
+                        v.getDouble(Components.POSITION, (e + 1) % v.size(), Components.LANE_X));
+            }
         };
-        World w = EntityScene.build(16);
+        ArchetypeWorld w = EntityScene.build(16);
         Scheduler s = new Scheduler(List.of(rogue), w);
         assertThrows(ContractViolation.class, () -> s.runReference(w));
     }
 
     @Test
     void emptyFlockDoesNotCrash() throws Exception {
-        World ref = EntityScene.build(0);
-        World par = EntityScene.build(0);
+        ArchetypeWorld ref = EntityScene.build(0);
+        ArchetypeWorld par = EntityScene.build(0);
         Scheduler s = new Scheduler(EntityScene.systems(), ref);
         ExecutorService pool = Executors.newFixedThreadPool(4);
         try {
@@ -64,14 +67,14 @@ class EntitySystemsTest {
     }
 
     private static long runReference() {
-        World w = EntityScene.build(N);
+        ArchetypeWorld w = EntityScene.build(N);
         Scheduler s = new Scheduler(EntityScene.systems(), w);
         for (int t = 0; t < TICKS; t++) s.runReference(w);
         return w.checksum();
     }
 
     private static long runParallel(int threads) throws Exception {
-        World w = EntityScene.build(N);
+        ArchetypeWorld w = EntityScene.build(N);
         Scheduler s = new Scheduler(EntityScene.systems(), w);
         ExecutorService pool = Executors.newFixedThreadPool(threads);
         try {

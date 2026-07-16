@@ -11,7 +11,6 @@ import java.util.concurrent.Executors;
  * checksum(reference)==checksum(parallel). Аргументы: [N] [ticks] [threads] (дефолт 150000 50 8).
  */
 public final class EntityDemo {
-    private static final String[] COMP = {"INVENTORY","ENERGY","PROGRESS","HEAT","FUEL","RECIPE","LINK","POSITION","VELOCITY","HEALTH"};
 
     public static void main(String[] args) throws Exception {
         int n       = args.length > 0 ? Integer.parseInt(args[0]) : 150_000;
@@ -19,8 +18,8 @@ public final class EntityDemo {
         int threads = args.length > 2 ? Integer.parseInt(args[2]) : 8;
 
         List<GameSystem> systems = EntityScene.systems();
-        World ref = EntityScene.build(n);
-        World par = EntityScene.build(n);
+        ArchetypeWorld ref = EntityScene.build(n);
+        ArchetypeWorld par = EntityScene.build(n);
         Scheduler sched = new Scheduler(systems, ref);
 
         System.out.printf("Стая: N=%d мобов (архетип MOB), ticks=%d, threads=%d%n", n, ticks, threads);
@@ -29,7 +28,7 @@ public final class EntityDemo {
             System.out.printf("  Стадия %d:%n", st);
             for (int si : sched.stages.get(st)) {
                 GameSystem g = systems.get(si);
-                System.out.printf("    %-12s r{%s} w{%s}%n", g.name(), names(g.reads()), names(g.writes()));
+                System.out.printf("    %-12s r{%s} w{%s}%n", g.name(), names(g.reads(), ref.reg), names(g.writes(), ref.reg));
             }
         }
 
@@ -48,11 +47,10 @@ public final class EntityDemo {
         if (!det) throw new IllegalStateException("Недетерминизм грязной подсистемы: ref != parallel");
     }
 
-    private static String names(long mask) {
-        StringBuilder sb = new StringBuilder();
-        for (int c = 0; c < COMP.length; c++)
-            if ((mask & Components.bit(c)) != 0) { if (sb.length() > 0) sb.append(','); sb.append(COMP[c]); }
-        return sb.length() == 0 ? "-" : sb.toString();
+    /** Имена компонентов — из реестра; раньше здесь был захардкоженный массив. */
+    private static String names(long mask, ComponentRegistry reg) {
+        String s = Main.names(mask, reg);
+        return s.isEmpty() ? "-" : s;
     }
 
     private EntityDemo() {}

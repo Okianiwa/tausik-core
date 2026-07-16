@@ -1,6 +1,5 @@
 package ecs.systems;
 
-import ecs.Archetype;
 import ecs.CommandBuffer;
 import ecs.Components;
 import ecs.GameSystem;
@@ -15,15 +14,16 @@ public final class MobMove implements GameSystem {
     private static final double FIELD = 1000.0;
 
     public String name() { return "MobMove"; }
-    public int archetype() { return Archetype.MOB; }
     public long reads()  { return Components.mask(Components.VELOCITY); }
     public long writes() { return Components.mask(Components.POSITION); }
 
     public void run(View v, int e, CommandBuffer cb) {
-        double x = wrap(v.posX(e) + v.velX(e));
-        double y = wrap(v.posY(e) + v.velY(e));
-        v.setPosX(e, x);
-        v.setPosY(e, y);
+        double x = wrap(v.getDouble(Components.POSITION, e, Components.LANE_X)
+                + v.getDouble(Components.VELOCITY, e, Components.LANE_X));
+        double y = wrap(v.getDouble(Components.POSITION, e, Components.LANE_Y)
+                + v.getDouble(Components.VELOCITY, e, Components.LANE_Y));
+        v.setDouble(Components.POSITION, e, Components.LANE_X, x);
+        v.setDouble(Components.POSITION, e, Components.LANE_Y, y);
     }
 
     private static double wrap(double x) { return x - FIELD * Math.floor(x / FIELD); }

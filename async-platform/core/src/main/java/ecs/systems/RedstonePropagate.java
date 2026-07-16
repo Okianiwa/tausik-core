@@ -1,6 +1,5 @@
 package ecs.systems;
 
-import ecs.Archetype;
 import ecs.CommandBuffer;
 import ecs.Components;
 import ecs.GameSystem;
@@ -16,21 +15,25 @@ import ecs.View;
 public final class RedstonePropagate implements GameSystem {
     public static final int MAX = 15;
 
+    /** Ширина grid — топология сцены, не компонент. Задаётся сценой при сборке. */
+    private final int gridWidth;
+
+    public RedstonePropagate(int gridWidth) { this.gridWidth = gridWidth; }
+
     public String name() { return "RedstonePropagate"; }
-    public int archetype() { return Archetype.REDSTONE; }
     public long reads()  { return Components.mask(Components.POWER, Components.SOURCE); }
     public long writes() { return Components.mask(Components.POWER_NEXT); }
 
     public void run(View v, int e, CommandBuffer cb) {
-        if (v.source(e) == 1) { v.setPowerNext(e, MAX); return; }
-        int w = v.gridWidth();
+        if (v.getInt(Components.SOURCE, e) == 1) { v.setInt(Components.POWER_NEXT, e, MAX); return; }
+        int w = gridWidth;
         int x = e % w;
         int n = v.size();
         int best = 0;
-        if (x > 0)         best = Math.max(best, v.power(e - 1)); // left
-        if (x < w - 1)     best = Math.max(best, v.power(e + 1)); // right
-        if (e - w >= 0)    best = Math.max(best, v.power(e - w)); // up
-        if (e + w < n)     best = Math.max(best, v.power(e + w)); // down
-        v.setPowerNext(e, Math.max(0, best - 1));
+        if (x > 0)      best = Math.max(best, v.getInt(Components.POWER, e - 1)); // left
+        if (x < w - 1)  best = Math.max(best, v.getInt(Components.POWER, e + 1)); // right
+        if (e - w >= 0) best = Math.max(best, v.getInt(Components.POWER, e - w)); // up
+        if (e + w < n)  best = Math.max(best, v.getInt(Components.POWER, e + w)); // down
+        v.setInt(Components.POWER_NEXT, e, Math.max(0, best - 1));
     }
 }

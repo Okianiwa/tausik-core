@@ -12,7 +12,6 @@ import java.util.concurrent.Executors;
  * Аргументы: [N] [ticks] [threads]. По умолчанию 150000 50 8 (пул по физ.ядрам).
  */
 public final class Main {
-    private static final String[] COMP = {"INVENTORY","ENERGY","PROGRESS","HEAT","FUEL","RECIPE","LINK","POSITION","VELOCITY","HEALTH"};
 
     public static void main(String[] args) throws Exception {
         int n       = args.length > 0 ? Integer.parseInt(args[0]) : 150_000;
@@ -20,12 +19,12 @@ public final class Main {
         int threads = args.length > 2 ? Integer.parseInt(args[2]) : 8;
 
         List<GameSystem> systems = BlockEntityScene.systems();
-        World ref = BlockEntityScene.build(n);
-        World par = BlockEntityScene.build(n);
+        ArchetypeWorld ref = BlockEntityScene.build(n);
+        ArchetypeWorld par = BlockEntityScene.build(n);
         Scheduler sched = new Scheduler(systems, ref);
 
         System.out.printf("Сцена: N=%d блок-энтити, ticks=%d, threads=%d%n", n, ticks, threads);
-        printStages(sched);
+        printStages(sched, ref.reg);
 
         ExecutorService pool = Executors.newFixedThreadPool(threads);
         try {
@@ -42,22 +41,23 @@ public final class Main {
         if (!det) throw new IllegalStateException("Недетерминизм: ref != parallel");
     }
 
-    private static void printStages(Scheduler s) {
+    /** Имена компонентов берутся из реестра — раньше здесь был захардкоженный массив. */
+    static void printStages(Scheduler s, ComponentRegistry reg) {
         System.out.printf("Стадий: %d (систем всего: %d)%n", s.stages.size(), s.systems.size());
         for (int st = 0; st < s.stages.size(); st++) {
             int[] stage = s.stages.get(st);
             System.out.printf("  Стадия %d [%d систем]:%n", st, stage.length);
             for (int si : stage) {
                 GameSystem g = s.systems.get(si);
-                System.out.printf("    %-15s r{%s} w{%s}%n", g.name(), names(g.reads()), names(g.writes()));
+                System.out.printf("    %-15s r{%s} w{%s}%n", g.name(), names(g.reads(), reg), names(g.writes(), reg));
             }
         }
     }
 
-    private static String names(long mask) {
+    static String names(long mask, ComponentRegistry reg) {
         StringBuilder sb = new StringBuilder();
-        for (int c = 0; c < COMP.length; c++)
-            if ((mask & Components.bit(c)) != 0) { if (sb.length() > 0) sb.append(','); sb.append(COMP[c]); }
+        for (int c = 0; c < reg.count(); c++)
+            if ((mask & Components.bit(c)) != 0) { if (sb.length() > 0) sb.append(','); sb.append(reg.name(c)); }
         return sb.toString();
     }
 

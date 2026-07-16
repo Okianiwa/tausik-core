@@ -12,7 +12,7 @@ public final class RedstoneCascade {
     public static final int MAX_PASSES = 100_000; // страховка от незавершения
 
     /** Однопоточный fixpoint. Возвращает число проходов до стабилизации. */
-    public static int runReference(World w, Scheduler s) {
+    public static int runReference(ArchetypeWorld w, Scheduler s) {
         int passes = 0;
         while (passes < MAX_PASSES) {
             s.runReference(w);
@@ -23,7 +23,7 @@ public final class RedstoneCascade {
     }
 
     /** Параллельный fixpoint (проходы data-parallel, swap серийный). */
-    public static int runParallel(World w, Scheduler s, ExecutorService pool, int threads) throws Exception {
+    public static int runParallel(ArchetypeWorld w, Scheduler s, ExecutorService pool, int threads) throws Exception {
         int passes = 0;
         while (passes < MAX_PASSES) {
             s.runParallel(w, pool, threads);
@@ -33,11 +33,19 @@ public final class RedstoneCascade {
         return passes;
     }
 
-    /** Копирует powerNext→power, возвращает true если хоть одна клетка изменилась. */
-    private static boolean swapAndCheckChanged(World w) {
+    /**
+     * Копирует POWER_NEXT→POWER, возвращает true если хоть одна клетка изменилась.
+     * Идёт по архетипам, несущим оба компонента — какие именно, класс не знает.
+     */
+    private static boolean swapAndCheckChanged(ArchetypeWorld w) {
         boolean changed = false;
-        for (int e = 0; e < w.size; e++) {
-            if (w.power[e] != w.powerNext[e]) { w.power[e] = w.powerNext[e]; changed = true; }
+        for (ArchetypeStore s : w.stores()) {
+            if (!s.has(Components.POWER) || !s.has(Components.POWER_NEXT)) continue;
+            int[] power = s.intCol(Components.POWER);
+            int[] next = s.intCol(Components.POWER_NEXT);
+            for (int r = 0; r < s.size(); r++) {
+                if (power[r] != next[r]) { power[r] = next[r]; changed = true; }
+            }
         }
         return changed;
     }

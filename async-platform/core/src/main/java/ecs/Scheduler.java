@@ -7,36 +7,55 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 
 /**
- * Из объявленных reads/writes И диапазонов архетипов строит стадии и исполняет их.
- * Тонкая гранулярность: две системы конфликтуют ТОЛЬКО если пересекаются и множества компонентов,
- * И их диапазоны строк. Системы разных архетипов с общим типом компонента, но disjoint-строками
- * попадают в одну стадию (возврат системного параллелизма — вывод среза 1).
+ * Из объявленных reads/writes И матча архетипов строит стадии и исполняет их.
+ *
+ * Правило конфликта:
+ *     conflict(A,B) ⇔ (пересечение компонентов) И (пересечение матчнутых архетипов)
+ * Было — пересечение компонентов И пересечение диапазонов строк (Archetype.rangeOverlap).
+ * Диапазоны оказались ПРОКСИ для «тот же архетип»: они disjoint по построению сцены, поэтому
+ * пересечение строк было истинно ровно тогда, когда архетип общий. Матч по архетипам даёт ту же
+ * раскладку, но не требует непрерывности строк — строки свободно двигаются (exploration #1).
+ *
+ * Планирование одноразовое (в конструкторе), поэтому матч считается простыми boolean[] —
+ * никаких битсетов с искусственным потолком в 64 архетипа.
  * Детерминизм — фикс. порядок систем + упорядоченный apply отсортированных буферов.
  */
 public final class Scheduler {
     public final List<GameSystem> systems;
-    public final int[] sysLo;
-    public final int[] sysHi;
-    public final List<int[]> stages; // стадия = массив индексов систем (в стабильном порядке)
+    public final List<int[]> stages;
 
-    public Scheduler(List<GameSystem> systems, World w) {
+    private final boolean[][] matched; // [система][индекс архетипа]
+
+    public Scheduler(List<GameSystem> systems, ArchetypeWorld w) {
         this.systems = systems;
-        this.sysLo = new int[systems.size()];
-        this.sysHi = new int[systems.size()];
+        this.matched = matchArchetypes(systems, w);
+        this.stages = plan(systems, matched);
+    }
+
+    /** Архетип матчится системой, если он SUPERSET её component-query. */
+    static boolean[][] matchArchetypes(List<GameSystem> systems, ArchetypeWorld w) {
+        boolean[][] m = new boolean[systems.size()][w.storeCount()];
         for (int i = 0; i < systems.size(); i++) {
-            int a = systems.get(i).archetype();
-            sysLo[i] = w.lo(a);
-            sysHi[i] = w.hi(a);
+            long q = systems.get(i).query();
+            for (int a = 0; a < w.storeCount(); a++) {
+                m[i][a] = (w.storeAt(a).mask & q) == q;
+            }
         }
-        this.stages = plan(systems, sysLo, sysHi);
+        return m;
     }
 
     private static boolean componentConflict(GameSystem a, GameSystem b) {
         return (a.writes() & b.writes()) != 0 || (a.writes() & b.reads()) != 0 || (a.reads() & b.writes()) != 0;
     }
 
-    /** conflict(A,B) ⇔ пересечение компонентов И пересечение диапазонов строк. */
-    public static List<int[]> plan(List<GameSystem> systems, int[] lo, int[] hi) {
+    /** Матчат ли системы хотя бы один общий архетип. */
+    private static boolean archetypeOverlap(boolean[] a, boolean[] b) {
+        for (int k = 0; k < a.length; k++) if (a[k] && b[k]) return true;
+        return false;
+    }
+
+    /** conflict(A,B) ⇔ пересечение компонентов И пересечение матчнутых архетипов. */
+    public static List<int[]> plan(List<GameSystem> systems, boolean[][] matched) {
         List<List<Integer>> stageSys = new ArrayList<>();
         for (int i = 0; i < systems.size(); i++) {
             int placed = -1;
@@ -44,7 +63,7 @@ public final class Scheduler {
                 boolean conflict = false;
                 for (int j : stageSys.get(st)) {
                     if (componentConflict(systems.get(i), systems.get(j))
-                            && Archetype.rangeOverlap(lo[i], hi[i], lo[j], hi[j])) {
+                            && archetypeOverlap(matched[i], matched[j])) {
                         conflict = true;
                         break;
                     }
@@ -63,49 +82,57 @@ public final class Scheduler {
         return out;
     }
 
-    /** Однопоточный эталон: системы в порядке стадий, каждая — по своему диапазону строк. */
-    public void runReference(World w) {
+    /** Однопоточный эталон: системы в порядке стадий, каждая — по своим архетипам. */
+    public void runReference(ArchetypeWorld world) {
         for (int[] stage : stages) {
             List<CommandBuffer> buffers = new ArrayList<>();
             for (int si : stage) {
                 GameSystem s = systems.get(si);
-                View v = new View(w).bind(s.reads(), s.writes());
-                CommandBuffer cb = new CommandBuffer(si, sysLo[si]);
-                for (int e = sysLo[si]; e < sysHi[si]; e++) s.run(v, e, cb);
-                buffers.add(cb);
+                for (int a = 0; a < world.storeCount(); a++) {
+                    if (!matched[si][a]) continue;
+                    ArchetypeStore st = world.storeAt(a);
+                    View v = new View(world.reg).bind(st, s.reads(), s.writes());
+                    CommandBuffer cb = new CommandBuffer(si, st.mask, 0);
+                    for (int row = 0; row < st.size(); row++) s.run(v, row, cb);
+                    buffers.add(cb);
+                }
             }
-            applyOrdered(w, buffers);
+            applyOrdered(world, buffers);
         }
     }
 
-    /** Параллельно: внутри стадии — независимые задачи (система × чанк её диапазона строк). */
-    public void runParallel(World w, ExecutorService pool, int threads) throws Exception {
+    /** Параллельно: внутри стадии — независимые задачи (система × архетип × чанк строк). */
+    public void runParallel(ArchetypeWorld world, ExecutorService pool, int threads) throws Exception {
         int chunkCount = Math.max(1, threads);
         for (int[] stage : stages) {
             List<Callable<CommandBuffer>> tasks = new ArrayList<>();
             for (int si : stage) {
                 final GameSystem s = systems.get(si);
                 final int sysIdx = si;
-                int[] bounds = chunkBounds(sysLo[si], sysHi[si], chunkCount);
-                for (int c = 0; c < chunkCount; c++) {
-                    final int lo = bounds[c], hi = bounds[c + 1];
-                    if (lo == hi) continue;
-                    tasks.add(() -> {
-                        View v = new View(w).bind(s.reads(), s.writes());
-                        CommandBuffer cb = new CommandBuffer(sysIdx, lo);
-                        for (int e = lo; e < hi; e++) s.run(v, e, cb);
-                        return cb;
-                    });
+                for (int a = 0; a < world.storeCount(); a++) {
+                    if (!matched[si][a]) continue;
+                    final ArchetypeStore st = world.storeAt(a);
+                    int[] bounds = chunkBounds(0, st.size(), chunkCount);
+                    for (int c = 0; c < chunkCount; c++) {
+                        final int lo = bounds[c], hi = bounds[c + 1], chunk = c;
+                        if (lo == hi) continue;
+                        tasks.add(() -> {
+                            View v = new View(world.reg).bind(st, s.reads(), s.writes());
+                            CommandBuffer cb = new CommandBuffer(sysIdx, st.mask, chunk);
+                            for (int row = lo; row < hi; row++) s.run(v, row, cb);
+                            return cb;
+                        });
+                    }
                 }
             }
             List<Future<CommandBuffer>> fs = pool.invokeAll(tasks);
             List<CommandBuffer> buffers = new ArrayList<>(fs.size());
             for (Future<CommandBuffer> f : fs) buffers.add(f.get());
-            applyOrdered(w, buffers);
+            applyOrdered(world, buffers);
         }
     }
 
-    private static int[] chunkBounds(int lo, int hi, int chunks) {
+    static int[] chunkBounds(int lo, int hi, int chunks) {
         int n = hi - lo;
         int[] b = new int[chunks + 1];
         int base = n / chunks, rem = n % chunks, idx = lo;
@@ -115,20 +142,29 @@ public final class Scheduler {
     }
 
     /**
-     * Упорядоченный apply: буферы сортируются по (systemOrder, chunkStart), команды применяются
-     * в порядке эмиссии. OP_SET на один таргет → last-writer по этому тотальному порядку.
-     * Порядок не зависит от того, какой поток когда закончил → детерминизм.
+     * Упорядоченный apply: буферы сортируются по (systemOrder, archMask, chunkIndex), команды
+     * применяются в порядке эмиссии. OP_SET на один таргет → last-writer по этому тотальному
+     * порядку. Порядок не зависит ни от того, какой поток когда закончил, ни от порядка создания
+     * архетипов (сортируем по МАСКЕ, а не по индексу store) → детерминизм.
+     *
+     * Единственное место cross-archetype доступа: цель — стабильный entityId, резолвится здесь,
+     * на барьере, где индирекция дёшева (команд мало относительно полезной работы).
      */
-    static void applyOrdered(World w, List<CommandBuffer> buffers) {
-        buffers.sort((a, b) -> a.systemOrder != b.systemOrder
-                ? Integer.compare(a.systemOrder, b.systemOrder)
-                : Integer.compare(a.chunkStart, b.chunkStart));
+    static void applyOrdered(ArchetypeWorld world, List<CommandBuffer> buffers) {
+        buffers.sort((a, b) -> {
+            if (a.systemOrder != b.systemOrder) return Integer.compare(a.systemOrder, b.systemOrder);
+            if (a.archMask != b.archMask) return Long.compare(a.archMask, b.archMask);
+            return Integer.compare(a.chunkIndex, b.chunkIndex);
+        });
+        int arity = world.reg.arity(Components.INVENTORY);
         for (CommandBuffer cb : buffers) {
             for (int i = 0; i < cb.n; i++) {
-                int idx = w.invIndex(cb.entity[i], cb.slot[i]);
+                int e = cb.entity[i];
+                int[] col = world.storeOf(e).intCol(Components.INVENTORY);
+                int idx = world.rowOf(e) * arity + cb.slot[i];
                 switch (cb.op[i]) {
-                    case CommandBuffer.OP_ADD -> w.inv[idx] += (int) cb.value[i];
-                    case CommandBuffer.OP_SET -> w.inv[idx]  = (int) cb.value[i];
+                    case CommandBuffer.OP_ADD -> col[idx] += (int) cb.value[i];
+                    case CommandBuffer.OP_SET -> col[idx]  = (int) cb.value[i];
                 }
             }
         }

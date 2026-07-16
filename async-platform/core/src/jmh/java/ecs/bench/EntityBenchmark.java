@@ -2,7 +2,8 @@ package ecs.bench;
 
 import ecs.GameSystem;
 import ecs.Scheduler;
-import ecs.World;
+import ecs.ArchetypeWorld;
+import ecs.Components;
 import ecs.scene.EntityScene;
 
 import org.openjdk.jmh.annotations.Benchmark;
@@ -39,8 +40,8 @@ public class EntityBenchmark {
     public int threads;
 
     private Scheduler sched;
-    private World worldRef;
-    private World worldPar;
+    private ArchetypeWorld worldRef;
+    private ArchetypeWorld worldPar;
     private ExecutorService pool;
 
     @Setup(Level.Trial)
@@ -57,15 +58,20 @@ public class EntityBenchmark {
         pool.shutdownNow();
     }
 
+    /** POSITION.x энтити 0 — дешёвый якорь, чтобы JIT не выбросил тик. */
+    private static double posXOfFirst(ArchetypeWorld w) {
+        return w.storeOf(0).doubleCol(Components.POSITION)[w.rowOf(0) * 2 + Components.LANE_X];
+    }
+
     @Benchmark
     public void reference(Blackhole bh) {
         sched.runReference(worldRef);
-        bh.consume(worldRef.posX[0]);
+        bh.consume(posXOfFirst(worldRef));
     }
 
     @Benchmark
     public void parallel(Blackhole bh) throws Exception {
         sched.runParallel(worldPar, pool, threads);
-        bh.consume(worldPar.posX[0]);
+        bh.consume(posXOfFirst(worldPar));
     }
 }

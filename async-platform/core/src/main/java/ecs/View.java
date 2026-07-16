@@ -1,79 +1,75 @@
 package ecs;
 
 /**
- * Доступ системы к миру с проверкой контракта read/write на КАЖДОМ обращении.
+ * Доступ системы к СВОЕМУ архетипу с проверкой контракта read/write на КАЖДОМ обращении.
  * Проверка = тест битовой маски + ветка (O(1), kill-критерий #3 Phase 0 — фактически бесплатна).
  * Именно она позволяет планировщику доверять объявлениям и параллелить безопасно.
+ *
+ * Аксессоры GENERIC (getInt/getLong/getDouble + сеттеры), а не именованные по компоненту:
+ * иначе каждый новый компонент правил бы этот класс и AC #2 не выполнялся бы. Цена — одна
+ * лишняя индирекция (s.intCol(c) вместо w.posX): comp в месте вызова константа, JIT её хойстит.
+ *
+ * Индекс — localRow ВНУТРИ архетипа, не глобальная строка мира. Соседи (MobSense, RedstonePropagate)
+ * читаются по такому же localRow: доступ всегда внутри своего архетипа, cross-archetype — только
+ * через CommandBuffer.
  */
 public final class View {
-    private final World w;
+    private final int[] arity;
+    private ArchetypeStore s;
     private long reads, writes;
 
-    public View(World w) { this.w = w; }
+    public View(ComponentRegistry reg) {
+        arity = new int[reg.count()];
+        for (int c = 0; c < reg.count(); c++) arity[c] = reg.arity(c);
+    }
 
-    public View bind(long reads, long writes) { this.reads = reads; this.writes = writes; return this; }
+    public View bind(ArchetypeStore store, long reads, long writes) {
+        this.s = store;
+        this.reads = reads;
+        this.writes = writes;
+        return this;
+    }
 
-    public int size() { return w.size; } // для обёртки индексов соседей
+    /** Размер СВОЕГО архетипа (для обёртки индексов соседей). */
+    public int size() { return s.size(); }
+
+    /** localRow → стабильный entityId. Нужен для адресации целей CommandBuffer. */
+    public int entityAt(int row) { return s.entityAt(row); }
 
     private void checkRead(int comp) {
         if (((reads | writes) & Components.bit(comp)) == 0)
             throw new ContractViolation("read необъявленного компонента " + comp);
     }
+
     private void checkWrite(int comp) {
         if ((writes & Components.bit(comp)) == 0)
             throw new ContractViolation("write необъявленного компонента " + comp);
     }
 
-    // INVENTORY
-    public int inv(int e, int slot) { checkRead(Components.INVENTORY); return w.inv[w.invIndex(e, slot)]; }
-    public void setInv(int e, int slot, int v) { checkWrite(Components.INVENTORY); w.inv[w.invIndex(e, slot)] = v; }
+    public int getInt(int comp, int row) { checkRead(comp); return s.intCol(comp)[row * arity[comp]]; }
+    public int getInt(int comp, int row, int lane) { checkRead(comp); return s.intCol(comp)[row * arity[comp] + lane]; }
+    public void setInt(int comp, int row, int v) { checkWrite(comp); s.intCol(comp)[row * arity[comp]] = v; }
+    public void setInt(int comp, int row, int lane, int v) { checkWrite(comp); s.intCol(comp)[row * arity[comp] + lane] = v; }
 
-    // ENERGY
-    public long energy(int e) { checkRead(Components.ENERGY); return w.energy[e]; }
-    public void setEnergy(int e, long v) { checkWrite(Components.ENERGY); w.energy[e] = v; }
+    public long getLong(int comp, int row) { checkRead(comp); return s.longCol(comp)[row * arity[comp]]; }
+    public void setLong(int comp, int row, long v) { checkWrite(comp); s.longCol(comp)[row * arity[comp]] = v; }
 
-    // PROGRESS
-    public int progress(int e) { checkRead(Components.PROGRESS); return w.progress[e]; }
-    public void setProgress(int e, int v) { checkWrite(Components.PROGRESS); w.progress[e] = v; }
+    public double getDouble(int comp, int row) { checkRead(comp); return s.doubleCol(comp)[row * arity[comp]]; }
+    public double getDouble(int comp, int row, int lane) { checkRead(comp); return s.doubleCol(comp)[row * arity[comp] + lane]; }
+    public void setDouble(int comp, int row, double v) { checkWrite(comp); s.doubleCol(comp)[row * arity[comp]] = v; }
+    public void setDouble(int comp, int row, int lane, double v) { checkWrite(comp); s.doubleCol(comp)[row * arity[comp] + lane] = v; }
 
-    // HEAT
-    public double heat(int e) { checkRead(Components.HEAT); return w.heat[e]; }
-    public void setHeat(int e, double v) { checkWrite(Components.HEAT); w.heat[e] = v; }
-
-    // FUEL (burnTime)
-    public int burnTime(int e) { checkRead(Components.FUEL); return w.burnTime[e]; }
-    public void setBurnTime(int e, int v) { checkWrite(Components.FUEL); w.burnTime[e] = v; }
-
-    // RECIPE (read-only)
-    public int recipeTicks(int e) { checkRead(Components.RECIPE); return w.recipeTicks[e]; }
-
-    // LINK (read-only)
-    public int link(int e) { checkRead(Components.LINK); return w.link[e]; }
-
-    // POSITION (сущности; чтение соседа = posX(other))
-    public double posX(int e) { checkRead(Components.POSITION); return w.posX[e]; }
-    public double posY(int e) { checkRead(Components.POSITION); return w.posY[e]; }
-    public void setPosX(int e, double v) { checkWrite(Components.POSITION); w.posX[e] = v; }
-    public void setPosY(int e, double v) { checkWrite(Components.POSITION); w.posY[e] = v; }
-
-    // VELOCITY
-    public double velX(int e) { checkRead(Components.VELOCITY); return w.velX[e]; }
-    public double velY(int e) { checkRead(Components.VELOCITY); return w.velY[e]; }
-    public void setVelX(int e, double v) { checkWrite(Components.VELOCITY); w.velX[e] = v; }
-    public void setVelY(int e, double v) { checkWrite(Components.VELOCITY); w.velY[e] = v; }
-
-    // HEALTH
-    public int health(int e) { checkRead(Components.HEALTH); return w.health[e]; }
-    public void setHealth(int e, int v) { checkWrite(Components.HEALTH); w.health[e] = v; }
-
-    // REDSTONE (double-buffer: читаем POWER, пишем POWER_NEXT)
-    public int power(int e) { checkRead(Components.POWER); return w.power[e]; }
-    public void setPowerNext(int e, int v) { checkWrite(Components.POWER_NEXT); w.powerNext[e] = v; }
-    public int source(int e) { checkRead(Components.SOURCE); return w.source[e]; }
-    public int gridWidth() { return w.gridWidth; }
-
-    /** Диагностическая busy-work в scratch-приёмник (вне контракта, вне checksum). */
-    public void busy(int e) {
-        if (Work.WEIGHT > 0) w.busy[e] = Work.spin(e * 2654435761L + w.busy[e]);
+    /**
+     * Диагностическая busy-work в scratch-компонент BUSY (вне контракта, вне checksum) —
+     * регулятор веса per-entity работы из среза 3. Контракт намеренно НЕ проверяется: BUSY не
+     * объявляется системами. Отсутствие колонки — ошибка сборки сцены, поэтому падаем громко.
+     */
+    public void busy(int row) {
+        if (Work.WEIGHT <= 0) return;
+        long[] col = s.longCol(Components.BUSY);
+        if (col == null)
+            throw new IllegalStateException("Архетип " + Long.toBinaryString(s.mask)
+                    + " без компонента BUSY, но система вызывает busy() при Work.WEIGHT=" + Work.WEIGHT);
+        col[row] = Work.spin(row * 2654435761L + col[row]);
     }
 }

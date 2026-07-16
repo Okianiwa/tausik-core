@@ -2,7 +2,8 @@ package ecs.bench;
 
 import ecs.GameSystem;
 import ecs.Scheduler;
-import ecs.World;
+import ecs.ArchetypeWorld;
+import ecs.Components;
 import ecs.scene.BlockEntityScene;
 
 import org.openjdk.jmh.annotations.Benchmark;
@@ -42,8 +43,8 @@ public class TickBenchmark {
     public int work;
 
     private Scheduler sched;
-    private World worldRef;
-    private World worldPar;
+    private ArchetypeWorld worldRef;
+    private ArchetypeWorld worldPar;
     private ExecutorService pool;
 
     @Setup(Level.Trial)
@@ -61,15 +62,20 @@ public class TickBenchmark {
         pool.shutdownNow();
     }
 
+    /** PROGRESS энтити 0 (печь) — дешёвый якорь, чтобы JIT не выбросил тик. */
+    private static int progressOfFirst(ArchetypeWorld w) {
+        return w.storeOf(0).intCol(Components.PROGRESS)[w.rowOf(0)];
+    }
+
     @Benchmark
     public void reference(Blackhole bh) {
         sched.runReference(worldRef);
-        bh.consume(worldRef.progress[0]);
+        bh.consume(progressOfFirst(worldRef));
     }
 
     @Benchmark
     public void parallel(Blackhole bh) throws Exception {
         sched.runParallel(worldPar, pool, threads);
-        bh.consume(worldPar.progress[0]);
+        bh.consume(progressOfFirst(worldPar));
     }
 }

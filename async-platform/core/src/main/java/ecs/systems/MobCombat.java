@@ -1,6 +1,5 @@
 package ecs.systems;
 
-import ecs.Archetype;
 import ecs.CommandBuffer;
 import ecs.Components;
 import ecs.GameSystem;
@@ -18,19 +17,21 @@ public final class MobCombat implements GameSystem {
     private static final int CROWD = 3;
 
     public String name() { return "MobCombat"; }
-    public int archetype() { return Archetype.MOB; }
     public long reads()  { return Components.mask(Components.POSITION); }
     public long writes() { return Components.mask(Components.HEALTH); }
 
     public void run(View v, int e, CommandBuffer cb) {
         int n = v.size();
-        double x = v.posX(e), y = v.posY(e);
+        double x = v.getDouble(Components.POSITION, e, Components.LANE_X);
+        double y = v.getDouble(Components.POSITION, e, Components.LANE_Y);
         int crowd = 0;
         for (int k = 1; k <= K; k++) {
             int j = (e + k) % n;
-            double dx = x - v.posX(j), dy = y - v.posY(j);
+            double dx = x - v.getDouble(Components.POSITION, j, Components.LANE_X);
+            double dy = y - v.getDouble(Components.POSITION, j, Components.LANE_Y);
             if (dx * dx + dy * dy < R2) crowd++;
         }
-        if (crowd >= CROWD && v.health(e) > 0) v.setHealth(e, v.health(e) - 1);
+        int hp = v.getInt(Components.HEALTH, e);
+        if (crowd >= CROWD && hp > 0) v.setInt(Components.HEALTH, e, hp - 1);
     }
 }

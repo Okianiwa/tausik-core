@@ -16,9 +16,9 @@ public final class RedstoneDemo {
         int gh = args.length > 1 ? Integer.parseInt(args[1]) : 400;
         int threads = args.length > 2 ? Integer.parseInt(args[2]) : 8;
 
-        World ref = RedstoneScene.build(gw, gh);
-        World par = RedstoneScene.build(gw, gh);
-        Scheduler sched = new Scheduler(RedstoneScene.systems(), ref);
+        ArchetypeWorld ref = RedstoneScene.build(gw, gh);
+        ArchetypeWorld par = RedstoneScene.build(gw, gh);
+        Scheduler sched = new Scheduler(RedstoneScene.systems(gw), ref);
 
         System.out.printf("Редстоун: grid %dx%d = %d клеток, threads=%d%n", gw, gh, gw * gh, threads);
         System.out.printf("Стадий: %d (систем: %d — проход двигает сигнал на 1 клетку)%n",

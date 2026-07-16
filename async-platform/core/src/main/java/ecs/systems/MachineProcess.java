@@ -6,32 +6,34 @@ import ecs.GameSystem;
 import ecs.View;
 
 /**
- * Электромашина: тратит энергию, двигает прогресс, по завершении перекладывает
- * input→output в своём инвентаре. Конфликтует с печью по ТИПУ {PROGRESS, INVENTORY},
- * хотя строки энтити не пересекаются — это и есть цена консервативной type-гранулярности.
+ * Тик машины: тратит ENERGY, двигает прогресс, по завершении перекладывает
+ * input→output в своём инвентаре. По ТИПУ {PROGRESS, INVENTORY} пересекается с печью, но
+ * архетипы разные (у машины ENERGY, у печи RECIPE/HEAT/FUEL) → конфликта нет, одна стадия.
+ * Гейт «не машина» по energy<=0 убран: архетип матчится по компонентам.
  */
 public final class MachineProcess implements GameSystem {
     private static final long COST = 10;
     private static final int MACHINE_TICKS = 100;
 
     public String name() { return "MachineProcess"; }
-    public int archetype() { return ecs.Archetype.MACHINE; }
     public long reads()  { return 0; }
     public long writes() { return Components.mask(Components.PROGRESS, Components.INVENTORY, Components.ENERGY); }
 
     public void run(View v, int e, CommandBuffer cb) {
         v.busy(e); // диагностический вес (Work.WEIGHT), 0 по умолчанию
-        if (v.energy(e) <= 0) return; // не машина (архетип гейтится данными)
 
-        if (v.energy(e) >= COST && v.inv(e, Components.SLOT_INPUT) > 0) {
-            v.setEnergy(e, v.energy(e) - COST);
-            int p = v.progress(e) + 1;
+        long energy = v.getLong(Components.ENERGY, e);
+        if (energy >= COST && v.getInt(Components.INVENTORY, e, Components.SLOT_INPUT) > 0) {
+            v.setLong(Components.ENERGY, e, energy - COST);
+            int p = v.getInt(Components.PROGRESS, e) + 1;
             if (p >= MACHINE_TICKS) {
-                v.setInv(e, Components.SLOT_INPUT,  v.inv(e, Components.SLOT_INPUT)  - 1);
-                v.setInv(e, Components.SLOT_OUTPUT, v.inv(e, Components.SLOT_OUTPUT) + 1);
-                v.setProgress(e, 0);
+                v.setInt(Components.INVENTORY, e, Components.SLOT_INPUT,
+                        v.getInt(Components.INVENTORY, e, Components.SLOT_INPUT) - 1);
+                v.setInt(Components.INVENTORY, e, Components.SLOT_OUTPUT,
+                        v.getInt(Components.INVENTORY, e, Components.SLOT_OUTPUT) + 1);
+                v.setInt(Components.PROGRESS, e, 0);
             } else {
-                v.setProgress(e, p);
+                v.setInt(Components.PROGRESS, e, p);
             }
         }
     }
