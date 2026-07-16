@@ -6,8 +6,13 @@ package ecs;
  * Именно она позволяет планировщику доверять объявлениям и параллелить безопасно.
  *
  * Аксессоры GENERIC (getInt/getLong/getDouble + сеттеры), а не именованные по компоненту:
- * иначе каждый новый компонент правил бы этот класс и AC #2 не выполнялся бы. Цена — одна
- * лишняя индирекция (s.intCol(c) вместо w.posX): comp в месте вызова константа, JIT её хойстит.
+ * иначе каждый новый компонент правил бы этот класс и AC #2 не выполнялся бы. Цена — индирекция
+ * против прямого w.posX[e]; часть её снимается кэшем колонок на bind (ниже).
+ *
+ * ТАБЛИЦЫ КОЛОНОК КЭШИРУЮТСЯ НА BIND, а не резолвятся на каждом обращении: было
+ * s.intCol(c)[...] = загрузить поле s, из него поле intCols, потом [c]; стало iCols[c][...] —
+ * на один зависимый load меньше на КАЖДЫЙ доступ. Законно, потому что на время стадии строки
+ * заморожены (инвариант C) и колонки не переаллоцируются.
  *
  * Индекс — localRow ВНУТРИ архетипа, не глобальная строка мира. Соседи (MobSense, RedstonePropagate)
  * читаются по такому же localRow: доступ всегда внутри своего архетипа, cross-archetype — только
@@ -16,6 +21,9 @@ package ecs;
 public final class View {
     private final int[] arity;
     private ArchetypeStore s;
+    private int[][] iCols;
+    private long[][] lCols;
+    private double[][] dCols;
     private long reads, writes;
 
     public View(ComponentRegistry reg) {
@@ -25,6 +33,9 @@ public final class View {
 
     public View bind(ArchetypeStore store, long reads, long writes) {
         this.s = store;
+        this.iCols = store.intCols();
+        this.lCols = store.longCols();
+        this.dCols = store.doubleCols();
         this.reads = reads;
         this.writes = writes;
         return this;
@@ -46,18 +57,18 @@ public final class View {
             throw new ContractViolation("write необъявленного компонента " + comp);
     }
 
-    public int getInt(int comp, int row) { checkRead(comp); return s.intCol(comp)[row * arity[comp]]; }
-    public int getInt(int comp, int row, int lane) { checkRead(comp); return s.intCol(comp)[row * arity[comp] + lane]; }
-    public void setInt(int comp, int row, int v) { checkWrite(comp); s.intCol(comp)[row * arity[comp]] = v; }
-    public void setInt(int comp, int row, int lane, int v) { checkWrite(comp); s.intCol(comp)[row * arity[comp] + lane] = v; }
+    public int getInt(int comp, int row) { checkRead(comp); return iCols[comp][row * arity[comp]]; }
+    public int getInt(int comp, int row, int lane) { checkRead(comp); return iCols[comp][row * arity[comp] + lane]; }
+    public void setInt(int comp, int row, int v) { checkWrite(comp); iCols[comp][row * arity[comp]] = v; }
+    public void setInt(int comp, int row, int lane, int v) { checkWrite(comp); iCols[comp][row * arity[comp] + lane] = v; }
 
-    public long getLong(int comp, int row) { checkRead(comp); return s.longCol(comp)[row * arity[comp]]; }
-    public void setLong(int comp, int row, long v) { checkWrite(comp); s.longCol(comp)[row * arity[comp]] = v; }
+    public long getLong(int comp, int row) { checkRead(comp); return lCols[comp][row * arity[comp]]; }
+    public void setLong(int comp, int row, long v) { checkWrite(comp); lCols[comp][row * arity[comp]] = v; }
 
-    public double getDouble(int comp, int row) { checkRead(comp); return s.doubleCol(comp)[row * arity[comp]]; }
-    public double getDouble(int comp, int row, int lane) { checkRead(comp); return s.doubleCol(comp)[row * arity[comp] + lane]; }
-    public void setDouble(int comp, int row, double v) { checkWrite(comp); s.doubleCol(comp)[row * arity[comp]] = v; }
-    public void setDouble(int comp, int row, int lane, double v) { checkWrite(comp); s.doubleCol(comp)[row * arity[comp] + lane] = v; }
+    public double getDouble(int comp, int row) { checkRead(comp); return dCols[comp][row * arity[comp]]; }
+    public double getDouble(int comp, int row, int lane) { checkRead(comp); return dCols[comp][row * arity[comp] + lane]; }
+    public void setDouble(int comp, int row, double v) { checkWrite(comp); dCols[comp][row * arity[comp]] = v; }
+    public void setDouble(int comp, int row, int lane, double v) { checkWrite(comp); dCols[comp][row * arity[comp] + lane] = v; }
 
     /**
      * Диагностическая busy-work в scratch-компонент BUSY (вне контракта, вне checksum) —
@@ -66,7 +77,7 @@ public final class View {
      */
     public void busy(int row) {
         if (Work.WEIGHT <= 0) return;
-        long[] col = s.longCol(Components.BUSY);
+        long[] col = lCols[Components.BUSY];
         if (col == null)
             throw new IllegalStateException("Архетип " + Long.toBinaryString(s.mask)
                     + " без компонента BUSY, но система вызывает busy() при Work.WEIGHT=" + Work.WEIGHT);

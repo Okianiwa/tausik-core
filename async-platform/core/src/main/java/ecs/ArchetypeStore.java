@@ -55,6 +55,13 @@ public final class ArchetypeStore {
     public long[]   longCol(int comp)   { return longCols[comp]; }
     public double[] doubleCol(int comp) { return doubleCols[comp]; }
 
+    // Пакетные: View берёт таблицы колонок ОДИН раз на bind и дальше индексирует их напрямую,
+    // не заходя в store на каждом обращении. Массивы отдаются как есть (не копия) — это горячий
+    // путь; законно, потому что на время стадии строки заморожены и колонки не переаллоцируются.
+    int[][]    intCols()    { return intCols; }
+    long[][]   longCols()   { return longCols; }
+    double[][] doubleCols() { return doubleCols; }
+
     /** localRow → стабильный entityId. Обратная сторона карты World.entityRow. */
     public int entityAt(int row) {
         if (row < 0 || row >= size) throw new IndexOutOfBoundsException("row=" + row + " size=" + size);
