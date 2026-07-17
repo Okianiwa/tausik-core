@@ -57,6 +57,22 @@ GAMERULES = {
 }
 
 
+def purge_cmds() -> list[str]:
+    """Чистка сцены ОТРИЦАНИЕМ, а не списком типов.
+
+    Список типов — источник самого дорогого брака эпика. Прежняя уборка знала
+    про zombie/item/experience_orb, а 339 zombie_villager + 296 slime + 109
+    drowned от смешанного теста прошлой сессии пережили и teardown, и setup:
+    ядро тикало 7170 сущностей при сцене 6400, ваниль дала 126.3 мс вместо
+    90.5 — 28% результата, выглядевших как факт (дрейф 0.0%, ошибок 0).
+    Перечисление не может покрыть то, чего в нём нет; отрицание может.
+
+    Блоки (barrier загона, пол, чужие фермы) сущностями не являются — kill их
+    не трогает, поэтому сцене это ничем не грозит.
+    """
+    return ["kill @e[type=!player]"]
+
+
 def scene_setup(side: int) -> list[str]:
     """Загон + пол + чистка. barrier по периметру держит плотность: без стен
     зомби расходятся за время замера и MSPT уплывает вместе с ними."""
@@ -66,13 +82,7 @@ def scene_setup(side: int) -> list[str]:
         "difficulty normal",
         *[f"gamerule {k} {v}" for k, v in GAMERULES.items()],
         "time set midnight",
-        "kill @e[type=zombie]",
-        f"kill @e[type={MOB[0]}]",
-        # Предметы-остатки прошлых стендов ДЕСПАВНЯТСЯ по ходу замера: каждый
-        # деспавн — структурная мутация трекинга, то есть шум, не относящийся к
-        # мобам. Сцена обязана содержать ТОЛЬКО то, что мы меряем.
-        "kill @e[type=item]",
-        "kill @e[type=experience_orb]",
+        *purge_cmds(),
         f"fill {X0 - 1} {Y_FLOOR} {Z0 - 1} {x1 + 1} {Y_FLOOR} {z1 + 1} stone",
         # ПОСЛОЙНО, а не одним объёмом: у /fill предел 32768 блоков, и куб
         # 82x82x5 = 33620 его перебирает. Сервер отвечает «Too many blocks» и
@@ -138,6 +148,30 @@ RE_CMD_FAIL = re.compile(
     r"Too many blocks|Incorrect argument|Unknown or incomplete command|"
     r"Unable to summon|That position is not loaded"
 )
+
+
+# Шум ОКРУЖЕНИЯ, а не отказ ядра. Сервер ходит в api.minecraftservices.com за
+# публичными ключами подписи чата; когда интернет тупит, в лог падает ERROR +
+# Exception + Caused by — ровно три строки, и весь прогон уходит в брак. Поток
+# `Yggdrasil Key Fetcher`, не `Server thread`; случается на старте, до сцены;
+# на тик не влияет — доказано: точки, забракованные этим таймаутом (48.4/54.0/
+# 59.6 мс), легли на модель, построенную по прогонам с ошибок=0, с ошибкой <3%.
+# Тот же принцип, что у RE_CMD_FAIL с «No entity was found»: гард, кричащий на
+# норму, быстро научит себя игнорировать. Список НАМЕРЕННО узкий — глушим
+# конкретный внешний таймаут, а не «сетевые ошибки вообще».
+ERROR_IGNORE = (
+    "Yggdrasil",
+    "api.minecraftservices.com",
+    "authlib.exceptions.MinecraftClientException",
+    "java.net.SocketTimeoutException",
+)
+
+
+def is_real_error(line: str) -> bool:
+    """Отказ, за который прогон обязан быть забракован (в отличие от шума среды)."""
+    if not ("Exception" in line or "/ERROR]" in line):
+        return False
+    return not any(mark in line for mark in ERROR_IGNORE)
 
 
 def verify_no_cmd_errors(srv: tp.ServerProc, stage: str) -> None:
@@ -237,19 +271,22 @@ def run_once(
         wall = time.monotonic() - t_before
         tps = ticks / wall if wall else 0
         paused = any("Server empty" in ln for ln in srv.transcript)
-        print(f"  тиков за замер: {ticks} за {wall:.0f} с = {tps:.1f} TPS | пауза в логе: {'ДА' if paused else 'нет'}", flush=True)
+        print(
+            f"  тиков за замер: {ticks} за {wall:.0f} с = {tps:.1f} TPS | пауза в логе: {'ДА' if paused else 'нет'}",
+            flush=True,
+        )
         n_after = read_count(srv, side)
 
         stat = [ln for ln in srv.transcript if "MCW-STAT" in ln]
         marker = any(pc.MARKER in ln for ln in srv.transcript)
-        errors = [ln for ln in srv.transcript if "Exception" in ln or "/ERROR]" in ln]
+        errors = [ln for ln in srv.transcript if is_real_error(ln)]
     finally:
         # Teardown: мир СОХРАНЯЕТСЯ между прогонами, и зомби прошлой руки тикали
         # бы ещё до setup следующей — на старте, когда правила сцены (cramming)
         # ещё не применены. Каждый прогон обязан начинаться с пустого мира.
         try:
-            srv.send(f"kill @e[type={MOB[0]}]")
-            srv.send("kill @e[type=item]")
+            for c in purge_cmds():
+                srv.send(c)
             srv.send("save-all flush")
             time.sleep(4)
         except Exception:
@@ -259,7 +296,7 @@ def run_once(
     # Гард горизонта: сцена ОБЯЗАНА пережить собственный замер. Дрейф >2%
     # означает, что мерили уже не то, что построили.
     drift = abs(n_after - n_before) / n_before
-    lost = any('ПОТЕРЯ' in x for x in stat)
+    lost = any("ПОТЕРЯ" in x for x in stat)
     # Замер на СПЯЩЕМ сервере даёт правдоподобный MSPT при стоящем мире.
     ticking = tps >= 1.0
     ok = marker == patched and not errors and drift <= 0.02 and not lost and ticking
