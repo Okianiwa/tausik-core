@@ -112,13 +112,17 @@ class ArmResult:
 
 
 class ServerProc:
-    """Сервер + чтение stdout в фоне. Команды идут в stdin без ведущего слэша."""
+    """Сервер + чтение stdout в фоне. Команды идут в stdin без ведущего слэша.
 
-    def __init__(self, java: Path):
+    cmd переопределяет команду запуска целиком: патченное ядро стартует через
+    -cp в обход bundler (он сверяет SHA-256 внутренних jar), см. patched_core.py.
+    """
+
+    def __init__(self, java: Path, cmd: list[str] | None = None):
         self.lines: queue.Queue[str] = queue.Queue()
         self.transcript: list[str] = []
         self.proc = subprocess.Popen(
-            [str(java), "-Xmx4G", "-jar", JAR.name, "nogui"],
+            cmd if cmd is not None else [str(java), "-Xmx4G", "-jar", JAR.name, "nogui"],
             cwd=str(SERVER_DIR),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,

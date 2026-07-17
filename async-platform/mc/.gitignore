@@ -18,6 +18,11 @@
 !mc_session.py
 !prior-art-folia-mcmt.md
 !tick-profile.md
+# Стенд и отчёт переписанного ядра (сессия #11). Сами правленые классы Mojang
+# живут ВНЕ репозитория (D:/mc-core-work); здесь только наш код и выводы.
+!patched_core.py
+!ab_bench.py
+!core-parallel-rewrite.md
 
 # 3) подпапки наших выводов (если появятся) — разрешаем каталог, но не содержимое jar-ов
 !findings/
