@@ -25,6 +25,13 @@
 !core-parallel-rewrite.md
 !capacity-ceiling.md
 !tail-profile.md
+# Локализация contention замером JFR (сессия #13). Драйвер окна JFR + анализаторы
+# + отчёт. Кода Mojang нет: наш Python и выводы. .jfr-записи живут ВНЕ репо
+# (D:/mc-core-work/jfr), их сюда не тянем.
+!jfr_locate.py
+!jfr_sum.py
+!jfr_park.py
+!contention-locate.md
 
 # Тесты гардов стенда. Запрет протёк В ОБРАТНУЮ СТОРОНУ: не артефакт Mojang
 # просочился в репо, а НАШ код молча не попал в него — 13 тестов сессии #11
