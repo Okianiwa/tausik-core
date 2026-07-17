@@ -24,6 +24,7 @@
 !ab_bench.py
 !core-parallel-rewrite.md
 !capacity-ceiling.md
+!tail-profile.md
 
 # Тесты гардов стенда. Запрет протёк В ОБРАТНУЮ СТОРОНУ: не артефакт Mojang
 # просочился в репо, а НАШ код молча не попал в него — 13 тестов сессии #11
