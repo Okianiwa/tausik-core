@@ -101,22 +101,23 @@ class GatesMixin:
         # via `cached`/`warning` so callers don't read a bare passed=True as
         # "verified & cached".
         has_real_pass = any(r.get("passed") and not r.get("skipped") for r in (results or []))
-        cached = status == "hit" or (passed and has_real_pass)
-        # Only meaningful when verify gates are actually configured for this
-        # trigger — otherwise "nothing ran" is expected, not a trap.
+        manual_asserted = scope == "manual"
+        cached = status == "hit" or (passed and (has_real_pass or manual_asserted))
         from verify_cache import resolve_gate_signature
 
         gates_configured = resolve_gate_signature(trigger) not in ("empty", "unavailable")
         warning = None
         if passed and not has_real_pass and status != "hit" and gates_configured:
-            # All-skipped OR no gate produced a real pass → run_gates_with_cache
-            # did NOT record a green, so `task done` Verify-First won't see it.
-            warning = (
-                "NOT CACHED — verify PASSED but no gate produced a real pass "
-                "(gates skipped / no tests mapped). `task done` Verify-First will "
-                "NOT see this. Use scope='manual' for non-test deliverables, or "
-                "add tests."
-            )
+            if manual_asserted:  # honored: записан asserted-green, не советуем повторно
+                warning = (
+                    "RECORDED AS MANUAL (asserted) — no real gate pass (skipped/no tests), but "
+                    "scope='manual' recorded it. `task done` Verify-First will see it."
+                )
+            else:
+                warning = (
+                    "NOT CACHED — verify PASSED but no gate produced a real pass (skipped/no tests "
+                    "mapped). `task done` won't see it. Use scope='manual' or add tests."
+                )
         return {
             "passed": passed,
             "status": status,

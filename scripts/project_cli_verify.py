@@ -98,33 +98,56 @@ def cmd_verify(svc: ProjectService, args: Any) -> None:
     print(format_results(results))
     print(f"Duration: {duration_ms} ms")
 
-    # verify-skipped-silent-nocache: warn when a PASS came entirely from skipped
-    # gates (no tests mapped) — nothing was actually tested. The CLI still
-    # records under the caller's scope (manual = asserted), but the operator
-    # must know this was not a real gate pass.
-    if passed and results and all(r.get("skipped") for r in results):
-        print(
-            "WARN: verify PASSED but every gate was SKIPPED (no tests mapped) — "
-            "nothing was actually tested. Meaningful only under --scope manual; "
-            "otherwise add tests (tests/test_<module>.py)."
-        )
+    # Единая семантика с MCP/service_verification (fix-verify-manual): CLI больше НЕ пишет green
+    # безусловно. Паритет: green только при реальном pass ИЛИ под scope=manual (asserted).
+    has_real_pass = any(r.get("passed") and not r.get("skipped") for r in results)
+    all_skipped = bool(results) and all(r.get("skipped") for r in results)
 
-    summary = (
-        ", ".join(r["name"] + "=" + ("PASS" if r["passed"] else "FAIL") for r in results)
-        or "(no gates configured)"
-    )
-    record_run(
-        svc.be._conn,
-        task_slug=task_slug or None,
-        scope=scope,
-        command=cache_command,
-        exit_code=0 if passed else 1,
-        summary=summary,
-        files_hash=files_hash,
-        duration_ms=duration_ms,
-    )
-    print(
-        f"Recorded verification_run (task_slug={task_slug or '-'}, exit={'0' if passed else '1'})."
-    )
+    # ОБХОД (AC#6а, паритет service_verification no-test-mapped): relevant_files заявлены, но
+    # мапятся в НОЛЬ тестов (заявлен код, тестов нет) — отказать при ЛЮБОМ scope, даже manual.
+    if passed and relevant_files and all_skipped:
+        print(
+            f"FAIL: relevant_files {relevant_files} mapped to NO test files (no-test-mapped) — "
+            "add tests/test_<basename>.py. Отказ при любом scope (это обход, не эскейп)."
+        )
+        raise SystemExit(1)
+
+    if passed and all_skipped:
+        if scope == "manual":
+            print(
+                "WARN: every gate SKIPPED (no tests mapped) — recorded as MANUAL (asserted). "
+                "Не реальный gate-pass; осознанный эскейп для non-test deliverable."
+            )
+        else:
+            print(
+                "WARN: verify PASSED but every gate SKIPPED (no tests mapped) — nothing tested. "
+                "НЕ записано как green (scope != manual). --scope manual для non-test, иначе add tests."
+            )
+
+    # green пишем только при реальном pass ИЛИ под manual; fail пишем всегда (телеметрия).
+    should_record = (not passed) or has_real_pass or (scope == "manual")
+    if should_record:
+        summary = (
+            ", ".join(r["name"] + "=" + ("PASS" if r["passed"] else "FAIL") for r in results)
+            or "(no gates configured)"
+        )
+        record_run(
+            svc.be._conn,
+            task_slug=task_slug or None,
+            scope=scope,
+            command=cache_command,
+            exit_code=0 if passed else 1,
+            summary=summary,
+            files_hash=files_hash,
+            duration_ms=duration_ms,
+        )
+        print(
+            f"Recorded verification_run (task_slug={task_slug or '-'}, exit={'0' if passed else '1'})."
+        )
+    else:
+        print(
+            f"NOT recorded (all gates skipped under scope={scope}, non-manual) — "
+            "`task done` Verify-First won't see this."
+        )
     if not passed:
         raise SystemExit(1)
