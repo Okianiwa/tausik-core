@@ -55,6 +55,16 @@ def check_session_capacity(be: "SQLiteBackend", slug: str, task: dict[str, Any])
     if summary["session"] is None:
         return
     if budget > summary["remaining"]:
+        if budget > cap:
+            # Задача крупнее ЛЮБОЙ сессии: свежая сессия даст те же cap < budget, поэтому
+            # `session end` НЕ поможет (session-end-call-budget). Не отправляем агента в тупик —
+            # говорим прямо: разбей задачу или подними cap.
+            raise ServiceError(
+                f"Session capacity gate: '{slug}' budget={budget} exceeds session "
+                f"capacity={cap} entirely — a fresh session gives the same {cap} and won't "
+                f"unblock this. Split the task into sub-tasks, or raise "
+                f"session_capacity_calls in .tausik/config.json."
+            )
         raise ServiceError(
             f"Session capacity gate: '{slug}' budget={budget} exceeds remaining "
             f"{summary['remaining']}/{cap} this session. Split task, delegate to "
