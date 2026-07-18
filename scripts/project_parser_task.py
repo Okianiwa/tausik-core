@@ -94,7 +94,12 @@ def add_task(sub: argparse._SubParsersAction) -> None:
         dest="no_knowledge",
         help="Confirm no knowledge to capture",
     )
-    tdone.add_argument("--relevant-files", nargs="*", default=None)
+    tdone.add_argument(
+        "--relevant-files",
+        nargs="*",
+        default=None,
+        help="Paths SPACE-separated (e.g. src/foo.py tests/test_foo.py). NOT a JSON string.",
+    )
     evidence_group = tdone.add_mutually_exclusive_group()
     evidence_group.add_argument(
         "--evidence",
@@ -140,7 +145,8 @@ def add_task(sub: argparse._SubParsersAction) -> None:
         nargs="*",
         default=None,
         dest="update_relevant_files",
-        help="JSON-list scope for scoped verify / pytest gate (overwrites prior)",
+        help="Paths SPACE-separated (e.g. src/foo.py tests/test_foo.py) — scope for "
+        "scoped verify / pytest gate (overwrites prior). NOT a JSON string.",
     )
     _add_unit_flags(tupdate)
 
