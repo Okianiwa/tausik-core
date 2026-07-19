@@ -158,7 +158,7 @@ Relation types: `supersedes`, `caused_by`, `relates_to`, `contradicts`.
 | `tausik_gates_disable` | Disable gate | `name` |
 | `tausik_verify` | v1.4 Verify-First: run heavy gates (pytest, tsc, …) and cache green in `verification_runs`. After that `tausik_task_done` reads the cache and closes instantly. | `task_slug` |
 
-Available gates: `pytest`, `ruff`, `mypy`, `bandit`, `tsc`, `eslint`, `go-vet`, `golangci-lint`, `cargo-check`, `clippy`, `phpstan`, `phpcs`, `javac`, `ktlint`, `filesize`, `tdd_order`. Stack-scoped gates auto-enable based on detected stack; universal gates (`filesize`, `tdd_order`) apply to all stacks.
+Available gates: `pytest`, `ruff`, `mypy`, `bandit`, `tsc`, `eslint`, `go-vet`, `golangci-lint`, `cargo-check`, `clippy`, `phpstan`, `phpcs`, `javac`, `ktlint`, `filesize`, `tdd_order`, `bootstrap_drift`. Stack-scoped gates auto-enable based on detected stack; universal gates (`filesize`, `tdd_order`) apply to all stacks. `bootstrap_drift` is universal by registration but self-disables outside a TAUSIK source checkout — the invariant "`scripts/` deploys to `.<ide>/scripts/`" only holds there.
 
 `tdd_order` is disabled by default. Enable with `tausik_gates_enable name=tdd_order`.
 

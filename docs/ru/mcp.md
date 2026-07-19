@@ -158,7 +158,7 @@ tausik_task_done(slug=…, ac_verified=True)   # лёгкое: lookup в кеш�
 | `tausik_gates_disable` | Выключить gate | `name` |
 | `tausik_verify` | v1.4 Verify-First: запустить heavy gates (pytest, tsc, …) и закешировать green в `verification_runs`. После этого `tausik_task_done` использует кеш и закрывается мгновенно. | `task_slug` |
 
-Доступные gates: `pytest`, `ruff`, `mypy`, `bandit`, `tsc`, `eslint`, `go-vet`, `golangci-lint`, `cargo-check`, `clippy`, `phpstan`, `phpcs`, `javac`, `ktlint`, `filesize`, `tdd_order`. Stack-scoped gates авто-включаются по обнаруженному стеку; universal gates (`filesize`, `tdd_order`) применяются ко всем стекам.
+Доступные gates: `pytest`, `ruff`, `mypy`, `bandit`, `tsc`, `eslint`, `go-vet`, `golangci-lint`, `cargo-check`, `clippy`, `phpstan`, `phpcs`, `javac`, `ktlint`, `filesize`, `tdd_order`, `bootstrap_drift`. Stack-scoped gates авто-включаются по обнаруженному стеку; universal gates (`filesize`, `tdd_order`) применяются ко всем стекам. `bootstrap_drift` универсален по регистрации, но самоотключается вне исходного чекаута TAUSIK — инвариант «`scripts/` разворачивается в `.<ide>/scripts/`» верен только там.
 
 `tdd_order` отключён по умолчанию. Включите через `tausik_gates_enable name=tdd_order`.
 

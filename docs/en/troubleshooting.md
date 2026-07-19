@@ -35,6 +35,7 @@ project are also a strong signal (each prior IDE window leaks one).
 | `/start` warns `⚠ MCP Health` with stale module list | Watched module mtime advanced after MCP startup | Restart IDE; re-run `/start`. |
 | `sibling_mcp_count > 0` reported | Multiple MCP project servers on the same project (window leak) | Close stale IDE windows, then `Get-Process python` (Windows) / `pgrep -f mcp/project/server.py` (POSIX) and kill the older PIDs. |
 | `tausik_self_check` returns `error: self_check unavailable` | The running MCP server predates this diagnostic (older than v1.4 polish) | Restart IDE so the new server boots; the diagnostic is registered on fresh startups only. |
+| Commit rejected by the `bootstrap_drift` gate | Staged `scripts/` sources do not match the deployed copy — the committed code is not what the runtime executes | `python bootstrap/bootstrap.py`, then commit again. Emergency bypass: `TAUSIK_SKIP_COMMIT_GATES=1` or `git commit --no-verify` — after which the runtime stays stale and `doctor` keeps reporting drift. |
 
 Companion gotchas in `.tausik/tausik.db`: #77 (verify hang after editing
 `service_verification.py`/`gate_runner.py`), #79 (`task_done` hang on

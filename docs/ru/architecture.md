@@ -143,16 +143,18 @@ harness/
 ## Шлюзы качества
 
 ```
-project_config.py       → DEFAULT_GATES (16 шлюзов)
+project_config.py       → DEFAULT_GATES (26 шлюзов)
                         → STACK_GATE_MAP (автовключение по стеку)
                         → auto_enable_gates_for_stacks()
 gate_runner.py          → run_gates(trigger, files)
                         → run_command_gate() / run_filesize_gate() / run_tdd_order_gate()
+                        → run_bootstrap_drift_gate()
 service_task.py         → _run_quality_gates() (вызывается из task_done)
 ```
 
-Gates: `pytest`, `ruff`, `mypy`, `bandit`, `filesize`, `tdd_order`, `tsc`, `eslint`,
-`go-vet`, `golangci-lint`, `cargo-check`, `clippy`, `phpstan`, `phpcs`, `javac`, `ktlint`.
+Gates: `pytest`, `ruff`, `mypy`, `bandit`, `filesize`, `tdd_order`, `bootstrap_drift`,
+`tsc`, `eslint`, `go-vet`, `golangci-lint`, `cargo-check`, `clippy`, `phpstan`, `phpcs`,
+`javac`, `ktlint`.
 
 ## Hooks (anti-drift, см. [hooks.md](hooks.md))
 

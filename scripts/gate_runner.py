@@ -54,6 +54,7 @@ _FILESIZE_EXEMPT_BASENAMES = frozenset(
 )
 
 
+from gate_bootstrap_drift import run_bootstrap_drift_gate  # noqa: E402
 from gate_stack_dispatch import (  # noqa: E402,F401
     gate_applies_to,
     infer_stacks_from_files,
@@ -250,6 +251,8 @@ def run_gates(
             passed, output = run_filesize_gate(gate, files or [])
         elif name == "tdd_order":
             passed, output = run_tdd_order_gate(gate, files or [])
+        elif name == "bootstrap_drift":
+            passed, output = run_bootstrap_drift_gate(gate, files or [])
         else:
             passed, output = run_command_gate(gate, files or [])
 

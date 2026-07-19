@@ -53,6 +53,7 @@ Agent(
 | Агент игнорирует `tausik_task_done`, всегда зовёт v1 | MCP-сервер в проекте старее 1.3.7 | Перебутстрапь; v2 публикуется рядом с v1 с 1.3.7 и предпочтительный для QG-2. |
 | MCP tool returns stale data | MCP server cached старые scripts/* модули | Restart IDE session (re-bootstrap не помогает) |
 | `tausik doctor` reports drift | Source `scripts/` отличается от `.claude/scripts/` | Re-run `python bootstrap/bootstrap.py --ide claude` |
+| Коммит отбит гейтом `bootstrap_drift` | В staged есть файлы `scripts/`, не совпадающие с развёрнутой копией: зафиксированный код не тот, что исполняет рантайм | `python bootstrap/bootstrap.py`, затем коммит заново. Аварийный обход — `TAUSIK_SKIP_COMMIT_GATES=1` или `git commit --no-verify`; после него рантайм остаётся устаревшим, а `doctor` продолжит показывать drift |
 | `Memory #N not found` | Не указано в какой DB | Сейчас всегда project DB; brain — отдельная команда `tausik brain show` |
 
 ## Лимиты хоста & `task_done` UX

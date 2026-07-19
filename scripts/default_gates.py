@@ -56,6 +56,16 @@ UNIVERSAL_GATES: dict[str, dict] = {
         "command": None,
         "description": "Verify test files were modified (TDD enforcement)",
     },
+    "bootstrap_drift": {
+        "enabled": True,
+        "severity": "block",
+        "trigger": ["commit"],
+        "command": None,
+        # No file_extensions: that key only filters {files} for command gates.
+        # Built-ins scope themselves, and this one is stricter than an extension
+        # filter — scripts/ prefix AND .py.
+        "description": "Staged scripts/ must match the deployed .claude/scripts/ copy",
+    },
 }
 
 
