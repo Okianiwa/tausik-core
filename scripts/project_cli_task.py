@@ -10,11 +10,39 @@ other commands (epic/story/session/decisions) still need it.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from project_service import ProjectService
+
+
+def _reject_json_string_arg(values: list[str] | None, flag: str = "--relevant-files"):
+    """Детект JSON-строки как единственного аргумента nargs='*' → громкий отказ.
+
+    fix-relevant-files-nargs: агент, читая help «JSON-list», подавал JSON-строку
+    (`'["a.py", "b.py"]'`); nargs='*' + json.dumps клали в БД список-из-одной-строки-
+    с-JSON (двойная кодировка), который резолвер тестов не находит → verify молча SKIP
+    → ложное «проверено». Отвергаем громко с правильным вызовом (не молча пишем мусор).
+    """
+    from tausik_utils import ServiceError
+
+    if not values:
+        return values
+    if len(values) == 1 and values[0].lstrip()[:1] in ("[", '"'):
+        raise ServiceError(
+            f"{flag} принимает пути ЧЕРЕЗ ПРОБЕЛ, не JSON-строку. Получено похоже на "
+            f"JSON: {values[0]!r}. Правильно: {flag} a/b.py tests/test_b.py"
+        )
+    # AC#3: несуществующие пути не молча — предупреждаем (не reject: могут быть новые файлы).
+    missing = [v for v in values if not os.path.exists(v)]
+    if missing:
+        sys.stderr.write(
+            f"WARN: {flag}: пути не найдены на диске: {missing} — scoped verify даст для них "
+            "SKIP (нет тестов). Проверь пути.\n"
+        )
+    return values
 
 
 def cmd_task(svc: ProjectService, args: Any) -> None:
@@ -92,7 +120,7 @@ def cmd_task(svc: ProjectService, args: Any) -> None:
         _print_with_warnings(
             svc.task_done(
                 args.slug,
-                args.relevant_files,
+                _reject_json_string_arg(args.relevant_files),
                 args.ac_verified,
                 getattr(args, "no_knowledge", False),
                 evidence=getattr(args, "evidence", None),
@@ -129,7 +157,7 @@ def cmd_task(svc: ProjectService, args: Any) -> None:
                 fields[k] = v
         if args.ac is not None:
             fields["acceptance_criteria"] = args.ac
-        rf = getattr(args, "update_relevant_files", None)
+        rf = _reject_json_string_arg(getattr(args, "update_relevant_files", None))
         if rf is not None:
             fields["relevant_files"] = _json.dumps(list(rf))
         if fields:

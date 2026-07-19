@@ -107,7 +107,7 @@ class SessionMixin:
                 [sys.executable, hooks_script, "--auto", "--record"],
                 cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8",
                 timeout=30,
                 check=False,
                 stdin=subprocess.DEVNULL,

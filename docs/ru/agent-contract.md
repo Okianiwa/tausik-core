@@ -26,6 +26,15 @@ quality gates. Pytest gate использует `{test_files_for_files}` substit
   тем же `files_hash` → cache hit, gate skipped.
 - Security-sensitive файлы (`scripts/hooks/`, `/auth/`, `/payment/`, `/billing/`)
   обходят cache — всегда re-verify.
+- **`scope=manual`** — документированный эскейп для **non-test deliverables**
+  (docs, Java/не-python подпроекты, где `pytest` всегда SKIP). Под ним verify
+  записывает asserted-green (оператор берёт ответственность), и `task done`
+  Verify-First его принимает. **Единая семантика CLI и MCP** (fix-verify-manual):
+  green пишется только при реальном pass ИЛИ под `manual`; `scope=standard` +
+  all-skipped → НЕ green (регресс verify-skipped-silent-nocache недопустим).
+  Граница: `relevant_files` заявлены, но маппятся в НОЛЬ тестов → **FAIL
+  `no-test-mapped` при ЛЮБОМ scope, включая manual** — это обход «заявил код без
+  тестов», а не эскейп. Warning при `manual` не советует `manual` повторно.
 
 Залогируй проверку AC через `task log` перед закрытием.
 

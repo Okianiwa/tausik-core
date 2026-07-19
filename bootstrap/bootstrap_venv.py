@@ -41,7 +41,7 @@ def _check_version(python: str) -> tuple[int, ...] | None:
                 "import sys; print(sys.version_info.major, sys.version_info.minor)",
             ],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=10,
         )
         if result.returncode != 0:
@@ -116,7 +116,7 @@ def _resolve_py_launcher(py_cmd: str) -> str | None:
         result = subprocess.run(
             [py_cmd, "-3", "-c", "import sys; print(sys.executable)"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=10,
         )
         if result.returncode == 0:
@@ -204,7 +204,7 @@ def install_requirements(tausik_dir: str, lib_dir: str) -> bool:
         result = subprocess.run(
             [venv_python, "-m", "pip", "install", "-r", req_file, "--quiet"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=120,
         )
         if result.returncode != 0:

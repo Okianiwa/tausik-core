@@ -40,6 +40,39 @@ _GIT_PUSH_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Heredoc bodies are DATA, not commands — nothing inside them executes.
+# Matching there produced real false positives: a `tausik task add` whose
+# heredoc prose merely mentioned the push command got blocked, and this very
+# task failed to be filed the first time because of it. Same defect class the
+# gate is meant to catch (signature by name instead of by substance).
+_HEREDOC_START_RE = re.compile(r"<<-?\s*([\"']?)(\w+)\1")
+
+
+def _strip_heredocs(command: str) -> str:
+    """Blank out heredoc bodies so prose inside them cannot trigger the gate.
+
+    Quoted strings are deliberately NOT stripped: `bash -c "git push"` is a
+    real invocation, and dropping quotes would widen the bypass instead of
+    narrowing a false positive.
+    """
+    lines = command.split("\n")
+    out: list[str] = []
+    terminator: str | None = None
+
+    for line in lines:
+        if terminator is None:
+            out.append(line)
+            match = _HEREDOC_START_RE.search(line)
+            if match:
+                terminator = match.group(2)
+        elif line.strip() == terminator:
+            terminator = None
+            out.append(line)
+        # else: inside a heredoc body — dropped.
+
+    return "\n".join(out)
+
+
 TICKET_FILENAME = ".push_ticket.json"
 SCHEMA_VERSION = 1
 
@@ -138,7 +171,7 @@ def main() -> int:
     command = data.get("tool_input", {}).get("command", "")
     if not command:
         return 0
-    if not _GIT_PUSH_RE.search(command):
+    if not _GIT_PUSH_RE.search(_strip_heredocs(command)):
         return 0
 
     allow, reason = _consume_ticket()

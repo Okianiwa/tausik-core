@@ -314,7 +314,12 @@ def run_gates_with_cache(
     # same files_hash for 10 minutes. SCOPED-SKIP means "no test mapped" —
     # not "verified clean". Require at least one real (non-skipped) PASS.
     has_real_pass = any(r.get("passed") and not r.get("skipped") for r in results)
-    if passed and cache_ok and has_real_pass:
+    # scope=manual — документированный эскейп для non-test deliverables (docs/java/markdown):
+    # оператор берёт ответственность за asserted-green. Пишем даже all-skipped, НО только когда
+    # files пуст — files+all-skipped уже отсеян выше как обход (no-test-mapped FAIL, стр.297).
+    # Так CLI (record_run безусловно) и MCP становятся эквивалентны (MCP-first, fix-verify-manual).
+    manual_asserted = scope == "manual"
+    if passed and cache_ok and (has_real_pass or manual_asserted):
         try:
             summary = (
                 ", ".join(r["name"] + "=" + ("PASS" if r["passed"] else "FAIL") for r in results)

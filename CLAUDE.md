@@ -20,7 +20,7 @@ Stack: Python 3.11+ stdlib | CLI `.tausik/tausik` | DB SQLite+FTS5 | Tests pytes
 - **Нет кода без задачи.** `task start <slug>` перед Write/Edit.
 - **QG-0 Context Gate.** `task start` требует goal + acceptance_criteria.
 - **QG-2 Verify-First.** Heavy gates через `tausik verify --task <slug>` (cache 10 мин), затем `task done --ac-verified` читает кэш. Edge-cases — `docs/ru/agent-contract.md`.
-- **Нет коммита без gates.** Исправь blocking failures.
+- **Нет коммита без gates.** `pre-commit` → `gate_runner commit` по staged. Исправь blocking failures.
 - **Нет прямого доступа к БД.** Только MCP/CLI.
 - **Не угадывай аргументы CLI.** `tausik <cmd> --help` или `docs/ru/cli.md`.
 - **Исходники в корне** (`scripts/`, `docs/`, `harness/`, `bootstrap/`). Не редактируй `.claude/` напрямую.
@@ -65,6 +65,6 @@ CLI: ВСЕГДА `.tausik/tausik <команда>`. НИКОГДА `python scri
 
 <!-- DYNAMIC:START -->
 ## Current State
-Session: none | Branch: main | Version: 1.4.0
-Tasks: 2/2 done, 0 active, 0 blocked
+Session: #29 (active) | Branch: fix/commit-gates-and-encoding | Version: 1.4.0
+Tasks: 53/60 done, 0 active, 0 blocked
 <!-- DYNAMIC:END -->

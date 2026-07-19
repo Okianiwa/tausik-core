@@ -2,7 +2,7 @@
 
 # Хуки (v1.4)
 
-TAUSIK использует хуки Claude Code для автоматического контроля качества. Хуки перехватывают действия агента **до** и **после** выполнения — это шлюзы, не инструкции. **17 Python-хуков + 1 shell `pre-commit` = 18 активных хуков** идут с v1.4 (1.3.7 имел 16 + 1 = 17; v1.4 добавляет `secret_scan.py`).
+TAUSIK использует хуки Claude Code для автоматического контроля качества. Хуки перехватывают действия агента **до** и **после** выполнения — это шлюзы, не инструкции. **18 Python-хуков** идут с v1.4 (1.3.7 имел 16 + 1 shell = 17; v1.4 добавляет `secret_scan.py`, а shell-`pre-commit` заменён Python-реализацией `pre_commit_gates.py`, которая запускает commit-гейты вместо mypy).
 
 ## Что такое хуки
 
@@ -49,28 +49,33 @@ TAUSIK использует хуки Claude Code для автоматическ
 
 | Хук | Когда | Что делает |
 |------|-------|-----------|
-| `pre-commit` (shell) | Перед `git commit` | Запускает `python -m mypy` против `scripts/` (конфиг из `pyproject.toml`). На exit ≠ 0 — **блокирует commit**. Опционально гонит инкрементальный `codebase-rag` reindex (warn-only, лимит 5с); никогда не блокирует commit из-за RAG. |
+| `pre-commit` | Перед `git commit` | (1) **Проверка артефактов Mojang** — `mojang_artifact_scan.py`, идёт первой: это единственный отказ, который нельзя исправить следующим коммитом. (2) **Commit-гейты** через `gate_runner.py commit` (`ruff` + `filesize`, оба blocking). Реализация: `scripts/hooks/pre_commit_gates.py`. |
+
+Проверка Mojang опознаёт артефакт **по содержимому**, а не по имени: jar вскрывается и проверяется на `net/minecraft/**` и `META-INF/versions/*/server-*.jar`, плюс запретные пути (`async-platform/mc/{server,jre}/`) и распакованные классы. Поэтому `mv minecraft_server.jar backup.jar` не обходит проверку, а законный `gradle-wrapper.jar` (внутри `org/gradle/**`) проходит. `.gitignore` закрывает случайность, но не `git add -f` — флаг существует ровно для того, чтобы добавить игнорируемое; поэтому проверка стоит на коммите.
+
+Гейты судят **staged-содержимое**, а не рабочую копию: `git checkout-index` разворачивает индекс во временное дерево с сохранением относительных путей (это важно — `exempt_files` у `filesize` и `per-file-ignores` у `ruff` привязаны к путям). Поэтому «добавил чистую версию, потом продолжил править» не даёт ни ложного пропуска, ни ложной блокировки.
 
 Это **не** «scoped quality gates» — те запускаются через `tausik verify` (тяжёлый стек: pytest/tsc/cargo/phpstan/…) и развязаны с `git commit` начиная с v1.4 Verify-First Contract.
 
-### Установка (один раз)
+### Установка
+
+Ставится **автоматически** при `bootstrap.py` (`bootstrap/bootstrap_git_hooks.py`) — руками копировать ничего не нужно. В `.git/hooks/pre-commit` кладётся тонкий sh-шим, который на каждом запуске резолвит актуальную реализацию из `scripts/hooks/`, поэтому правка исходника действует сразу, без переустановки. Чужой (не-TAUSIK) `pre-commit` никогда не перезаписывается — bootstrap оставит его и предупредит.
+
+Переустановить вручную:
 
 ```bash
-# Вариант A: скопировать файл
-cp scripts/hooks/pre-commit .git/hooks/pre-commit
-chmod +x .git/hooks/pre-commit
-
-# Вариант B (рекомендуется): указать git на in-repo hooks-папку, чтобы обновления подхватывались автоматически
-git config core.hooksPath scripts/hooks
+python -c "import sys; sys.path.insert(0,'bootstrap'); from bootstrap_git_hooks import install_git_hooks; print(install_git_hooks('.'))"
 ```
 
-> **Windows caveat.** `pre-commit` — bash-скрипт с `timeout(1)` и POSIX-ом `[ -f … ]`. Чистый `cmd.exe` его не запустит. Используй Git Bash, WSL или терминал, в котором есть Bash + `timeout` в `PATH`. Если команда работает только под Windows — замени скрипт на `pre-commit.cmd`-обёртку, которая зовёт `python -m mypy` напрямую и держит тот же контракт по exit code.
+> **Не используйте `git config core.hooksPath scripts/hooks`.** Раньше это был рекомендованный способ; теперь он **отключит** установленный хук — git станет искать хуки только в указанной папке. Установка идёт через bootstrap в `.git/hooks/`.
+
+> **Windows.** Шим — POSIX sh (git на Windows запускает хуки через свой bundled sh), сама логика на Python. Python берётся из venv проекта, с откатом на системный. Отдельная `.cmd`-обёртка не нужна.
 
 ### Отключение / bypass
 
-- Разово: `git commit --no-verify` (полностью пропускает `core.hooksPath`).
-- Временно: `git config --unset core.hooksPath`.
-- На CI без mypy: на CI-раннере не выставляй `core.hooksPath`; тяжёлая верификация всё равно идёт через `tausik verify`.
+- Разово: `git commit --no-verify`.
+- Для сессии/CI: `TAUSIK_SKIP_COMMIT_GATES=1`.
+- Снять совсем: `bootstrap_git_hooks.uninstall_git_hooks('.')` (удаляет только TAUSIK-хуки, чужие не трогает).
 
 ## Как это работает
 
