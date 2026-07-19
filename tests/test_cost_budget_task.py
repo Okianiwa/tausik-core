@@ -435,6 +435,7 @@ class TestHookSilentNoOp:
             input="this is not json {",
             capture_output=True,
             text=True,
+            encoding="utf-8",
             cwd=proj,
             env={**os.environ, "CLAUDE_PROJECT_DIR": proj},
             timeout=10,
@@ -484,7 +485,7 @@ class TestHookWarnAndBlocker:
         result = _run_hook(proj)
         assert result.returncode == 0
         assert "[TAUSIK cost-budget BLOCKER]" in result.stderr
-        assert "2× hard cap reached" in result.stderr
+        assert "2x hard cap reached" in result.stderr
 
     def test_warn_at_1_5x_tokens(self, tmp_path):
         proj, db_path = _new_proj(tmp_path)

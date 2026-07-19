@@ -164,10 +164,13 @@ def _format_msg(
     trigger: str,
 ) -> str:
     """Compose the stderr line for the chosen level + trigger ('cost'|'tokens')."""
+    # ASCII-only: this line lands on the user's console, which on Windows is
+    # often cp866/cp1251. The multiplication sign and em-dash carried no
+    # meaning that "x" and "--" don't.
     if level == "BLOCKER":
-        cap_label = "2× hard cap reached — stop and re-plan or `tausik task update --cost-budget`"
+        cap_label = "2x hard cap reached -- stop and re-plan or `tausik task update --cost-budget`"
     else:
-        cap_label = "1.5× soft cap"
+        cap_label = "1.5x soft cap"
     if trigger == "cost" and cost_budget is not None:
         body = f"task {slug} at ${cost_actual:.4f} / ${float(cost_budget):.4f} ({cap_label})"
     elif trigger == "tokens" and token_budget is not None:

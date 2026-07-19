@@ -193,7 +193,7 @@ def cmd_update_claudemd(svc: ProjectService, args: Any) -> None:
         r = subprocess.run(
             ["git", "branch", "--show-current"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=5,
             stdin=subprocess.DEVNULL,
         )
