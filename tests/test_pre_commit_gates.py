@@ -137,6 +137,88 @@ class TestJudgesTheIndexNotTheWorktree:
         assert (dest / "pkg" / "mod.py").is_file()
 
 
+class TestCleanupNeverDecidesTheCommit:
+    """Discarding the staged tree must not outrank the gates' verdict.
+
+    The teardown used to sit on the way out of a `with TemporaryDirectory(...)`
+    block that closed *before* the return code was read. On Windows `rmtree`
+    fails for reasons that have nothing to do with the staged code — an open
+    handle, an antivirus scan, a read-only file — and that exception replaced
+    a passing run with a rejected commit plus a `tempfile` traceback.
+    """
+
+    @pytest.fixture
+    def broken_cleanup(self, monkeypatch):
+        def _boom(path, *args, **kwargs):
+            raise PermissionError(f"WinError 32-style lock on {path}")
+
+        monkeypatch.setattr(pre_commit_gates.shutil, "rmtree", _boom)
+
+    def _main_in(self, repo: Path, monkeypatch) -> int:
+        monkeypatch.chdir(repo)
+        return pre_commit_gates.main()
+
+    def test_green_gates_survive_a_failed_cleanup(
+        self, repo: Path, monkeypatch, broken_cleanup, capsys
+    ) -> None:
+        _write(repo, "small.py", 10)
+        _git(repo, "add", "small.py")
+        assert self._main_in(repo, monkeypatch) == 0
+        assert "could not remove temp tree" in capsys.readouterr().err
+
+    def test_red_gates_survive_a_failed_cleanup(
+        self, repo: Path, monkeypatch, broken_cleanup
+    ) -> None:
+        """The mirror case: a lost verdict in either direction is a lost gate."""
+        _write(repo, "big.py", 500)
+        _git(repo, "add", "big.py")
+        assert self._main_in(repo, monkeypatch) == 1
+
+    def test_early_return_survives_a_failed_cleanup(
+        self, repo: Path, monkeypatch, broken_cleanup
+    ) -> None:
+        """`return 0` for an empty index is a verdict too, decided before teardown."""
+        _write(repo, "f.py", 10)
+        _git(repo, "add", "f.py")
+        monkeypatch.setattr(pre_commit_gates, "materialize_index", lambda *a, **kw: [])
+        assert self._main_in(repo, monkeypatch) == 0
+
+    def test_warning_names_the_leaked_path(
+        self, repo: Path, monkeypatch, broken_cleanup, capsys
+    ) -> None:
+        """A silent leak is a silent error — the user must be able to find it."""
+        _write(repo, "small.py", 10)
+        _git(repo, "add", "small.py")
+        self._main_in(repo, monkeypatch)
+        assert "tausik-precommit-" in capsys.readouterr().err
+
+    def test_successful_cleanup_removes_the_tree(self, repo: Path, monkeypatch) -> None:
+        """CONTROL ON A KNOWN ANSWER: a fix that never cleans up is not a fix."""
+        seen: list[str] = []
+        real_rmtree = pre_commit_gates.shutil.rmtree
+
+        def _record(path, *args, **kwargs):
+            seen.append(str(path))
+            return real_rmtree(path, *args, **kwargs)
+
+        monkeypatch.setattr(pre_commit_gates.shutil, "rmtree", _record)
+        _write(repo, "small.py", 10)
+        _git(repo, "add", "small.py")
+
+        assert self._main_in(repo, monkeypatch) == 0
+        assert len(seen) == 1 and "tausik-precommit-" in seen[0]
+        assert not Path(seen[0]).exists(), "temp tree must actually be gone"
+
+    def test_discard_tree_never_raises(self, monkeypatch) -> None:
+        """Not just OSError: anything escaping here would replace the verdict."""
+
+        def _boom(path, *args, **kwargs):
+            raise RuntimeError("something exotic")
+
+        monkeypatch.setattr(pre_commit_gates.shutil, "rmtree", _boom)
+        pre_commit_gates.discard_tree("/nonexistent")  # must not raise
+
+
 class TestBypass:
     def test_env_skip_allows_commit(self, repo: Path) -> None:
         _write(repo, "big.py", 500)

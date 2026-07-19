@@ -7,7 +7,7 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg)](https://python.org)
 [![Tests](https://github.com/Kibertum/tausik-core/actions/workflows/tests.yml/badge.svg)](https://github.com/Kibertum/tausik-core/actions/workflows/tests.yml)
-[![3516 tests](https://img.shields.io/badge/tests-3516%20passed-brightgreen.svg)](#dogfooding-tausik-создан-с-помощью-себя)
+[![3522 tests](https://img.shields.io/badge/tests-3522%20passed-brightgreen.svg)](#dogfooding-tausik-создан-с-помощью-себя)
 [![Zero deps](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](#что-внутри)
 
 > ⚠️ **v1.4 — околостабильный pre-2.0 релиз.** Это последний минорный релиз

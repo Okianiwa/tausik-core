@@ -126,6 +126,59 @@ def run_gates(root: Path, workdir: Path, files: list[str]) -> tuple[int, str]:
     return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
 
+def discard_tree(path: str) -> None:
+    """Remove the staged-content tree, downgrading any failure to a warning.
+
+    Cleanup must never decide the commit. On Windows `rmtree` can fail long
+    after the gates have returned their verdict — an open handle from a gate
+    subprocess, an antivirus scan mid-flight, a read-only file. Letting that
+    propagate turns a *passing* run into a rejected commit for a reason that
+    has nothing to do with the staged code, and hands the developer a
+    `tempfile` traceback instead of a gate report.
+
+    A leaked temp directory is worth a warning. It is not worth a block.
+    """
+    try:
+        shutil.rmtree(path)
+    except Exception as exc:  # noqa: BLE001 — see above: never outrank the verdict
+        print(
+            f"[pre-commit] could not remove temp tree {path}: {exc}\n"
+            "[pre-commit] gates were unaffected; delete it by hand if it persists.",
+            file=sys.stderr,
+        )
+
+
+def judge(root: Path, dest: Path, files: list[str]) -> int:
+    """Decide the commit against staged content materialized in `dest`.
+
+    Split out of `main` so the verdict is fully computed — and reported —
+    before the tree is discarded, rather than after.
+    """
+    present = materialize_index(root, files, dest)
+    if not present:
+        return 0
+
+    # Licence check first: it is the only failure here that cannot be
+    # undone by a follow-up commit.
+    violations = mojang_artifact_scan.scan(present, dest)
+    if violations:
+        print(mojang_artifact_scan.format_report(violations), file=sys.stderr)
+        return 1
+
+    code, output = run_gates(root, dest, present)
+    if code == 0:
+        return 0
+
+    print(output.rstrip(), file=sys.stderr)
+    print(
+        "\nCOMMIT BLOCKED by TAUSIK gates (judged on staged content).\n"
+        "Fix the blocking failures above, `git add` the fixes, and commit again.\n"
+        "Emergency bypass: git commit --no-verify",
+        file=sys.stderr,
+    )
+    return 1
+
+
 def main() -> int:
     if os.environ.get("TAUSIK_SKIP_COMMIT_GATES") == "1":
         return 0
@@ -139,32 +192,16 @@ def main() -> int:
     if not files:
         return 0
 
-    with tempfile.TemporaryDirectory(prefix="tausik-precommit-") as tmp:
-        dest = Path(tmp)
-        present = materialize_index(root, files, dest)
-        if not present:
-            return 0
-
-        # Licence check first: it is the only failure here that cannot be
-        # undone by a follow-up commit.
-        violations = mojang_artifact_scan.scan(present, dest)
-        if violations:
-            print(mojang_artifact_scan.format_report(violations), file=sys.stderr)
-            return 1
-
-        code, output = run_gates(root, dest, present)
-
-    if code == 0:
-        return 0
-
-    print(output.rstrip(), file=sys.stderr)
-    print(
-        "\nCOMMIT BLOCKED by TAUSIK gates (judged on staged content).\n"
-        "Fix the blocking failures above, `git add` the fixes, and commit again.\n"
-        "Emergency bypass: git commit --no-verify",
-        file=sys.stderr,
-    )
-    return 1
+    # mkdtemp + try/finally rather than `with TemporaryDirectory(...)`: the
+    # context manager cleans up on the way out of the block, which put the
+    # teardown *ahead* of reading the return code. `finally` runs after the
+    # return value is evaluated, and `discard_tree` cannot raise, so the
+    # verdict survives a failed cleanup either way.
+    tmp = tempfile.mkdtemp(prefix="tausik-precommit-")
+    try:
+        return judge(root, Path(tmp), files)
+    finally:
+        discard_tree(tmp)
 
 
 if __name__ == "__main__":
