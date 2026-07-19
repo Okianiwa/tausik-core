@@ -24,36 +24,6 @@ if _script_dir not in sys.path:
 from project_config import get_gates_for_trigger, load_config  # noqa: E402
 
 
-def count_lines(filepath: str) -> int:
-    """Count lines in a file."""
-    try:
-        with open(filepath, encoding="utf-8", errors="replace") as f:
-            return sum(1 for _ in f)
-    except OSError:
-        return 0
-
-
-_FILESIZE_EXEMPT_DIRS = (
-    "tests/",
-    "harness/claude/mcp/",
-    "harness/cursor/mcp/",
-    "harness/qwen/mcp/",
-    ".claude/mcp/",
-    # Common exempt dirs for source materials, ADR markdowns, agent configs.
-    "docs/content/",
-    "docs/architecture/",
-    "backend/configs/",
-)
-
-# Append-only files that grow unboundedly by design — exempt from line cap.
-_FILESIZE_EXEMPT_BASENAMES = frozenset(
-    {
-        "CHANGELOG.md",
-        "CHANGELOG.ru.md",
-    }
-)
-
-
 from gate_bootstrap_drift import run_bootstrap_drift_gate  # noqa: E402
 from gate_stack_dispatch import (  # noqa: E402,F401
     gate_applies_to,
@@ -62,107 +32,16 @@ from gate_stack_dispatch import (  # noqa: E402,F401
 )
 
 
-def _normalize_path(p: str) -> str:
-    """Canonicalize path for matching: forward slashes, strip leading './'."""
-    n = os.path.normpath(p).replace("\\", "/")
-    if n.startswith("./"):
-        n = n[2:]
-    return n
-
-
-def run_filesize_gate(gate: dict, files: list[str]) -> tuple[bool, str]:
-    """Check file sizes against max_lines threshold.
-
-    Exempt: tests, MCP handlers (dispatchers, not creative logic).
-    Per-file exempts via gate.exempt_files: entries with '/' match by exact
-    path, bare names match by basename (covers a file anywhere in tree).
-    """
-    max_lines = gate.get("max_lines", 400)
-    exempt_paths: set[str] = set()
-    exempt_basenames: set[str] = set()
-    for entry in gate.get("exempt_files") or []:
-        norm = entry.replace("\\", "/")
-        if "/" in norm:
-            exempt_paths.add(_normalize_path(norm))
-        else:
-            exempt_basenames.add(norm)
-
-    violations = []
-    for f in files:
-        if not os.path.isfile(f):
-            continue
-        normalized = f.replace("\\", "/")
-        if any(d in normalized for d in _FILESIZE_EXEMPT_DIRS):
-            continue
-        canon = _normalize_path(f)
-        basename = os.path.basename(canon)
-        if canon in exempt_paths or basename in exempt_basenames:
-            continue
-        if basename in _FILESIZE_EXEMPT_BASENAMES:
-            continue
-        lines = count_lines(f)
-        if lines > max_lines:
-            violations.append(f"  {f}: {lines} lines (max {max_lines})")
-    if violations:
-        return False, "Files exceeding line limit:\n" + "\n".join(violations)
-    return True, "All files within line limit."
-
-
-def run_tdd_order_gate(gate: dict, files: list[str]) -> tuple[bool, str]:
-    """Check that test files are present among changed files.
-
-    TDD enforcement: if source files were changed, test files should also be changed.
-    Skips if only non-code files were modified.
-    """
-    code_exts = {
-        ".py",
-        ".ts",
-        ".tsx",
-        ".js",
-        ".jsx",
-        ".go",
-        ".rs",
-        ".java",
-        ".kt",
-        ".php",
-    }
-    test_patterns = (
-        "test_",
-        "_test.",
-        ".test.",
-        ".spec.",
-        "Test.",  # Java/Kotlin: FooTest.java, FooTest.kt
-        "Tests.",  # Java/Kotlin: FooTests.java
-        "tests/",
-        "test/",
-        "__tests__/",
-    )
-
-    code_files = []
-    test_files = []
-    for f in files:
-        normalized = f.replace("\\", "/")
-        _, ext = os.path.splitext(f)
-        if ext.lower() not in code_exts:
-            continue
-        if any(p in normalized for p in test_patterns):
-            test_files.append(f)
-        else:
-            code_files.append(f)
-
-    if not code_files:
-        return True, "No source code files changed — TDD check skipped."
-    if test_files:
-        return (
-            True,
-            f"TDD OK: {len(test_files)} test file(s) modified alongside {len(code_files)} source file(s).",
-        )
-    return False, (
-        f"{len(code_files)} source file(s) changed but no test files modified. "
-        "TDD requires tests to be written/updated alongside code changes."
-    )
-
-
+# Built-in (command=None) gate bodies live in gate_builtin_checks; re-exported
+# here so existing `from gate_runner import run_filesize_gate` keeps working.
+from gate_builtin_checks import (  # noqa: E402,F401
+    _FILESIZE_EXEMPT_BASENAMES,
+    _FILESIZE_EXEMPT_DIRS,
+    _normalize_path,
+    count_lines,
+    run_filesize_gate,
+    run_tdd_order_gate,
+)
 from gate_test_resolver import resolve_test_files_for_relevant  # noqa: F401, E402
 
 # v14b-filesize-debt-paydown: run_command_gate + _SCOPED_SKIP_SENTINEL extracted
@@ -375,13 +254,40 @@ def check_file_conflicts(tasks: list[dict]) -> list[tuple[str, str, list[str]]]:
     return conflicts
 
 
+def read_files_manifest(path: str) -> list[str]:
+    """Read a file list written by the pre-commit hook.
+
+    NUL-separated when the hook writes it, because a git path may legally
+    contain a newline and `staged_files` already reads them NUL-separated —
+    a line-based manifest would silently split such a path in two. Falls back
+    to lines so a hand-written manifest also works.
+    """
+    with open(path, encoding="utf-8") as fh:
+        blob = fh.read()
+    parts = blob.split("\0") if "\0" in blob else blob.splitlines()
+    return [p for p in parts if p]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run TAUSIK quality gates")
     parser.add_argument("trigger", choices=["task-done", "commit", "review"])
     parser.add_argument("--files", nargs="*", default=[])
+    parser.add_argument(
+        "--files-from",
+        metavar="PATH",
+        help=(
+            "Read the file list from PATH instead of argv. Windows caps a command "
+            "line at 32767 chars — ~979 repo-relative paths — and overflow surfaces "
+            "as an opaque WinError 206. Combines with --files."
+        ),
+    )
     args = parser.parse_args()
 
-    all_passed, results = run_gates(args.trigger, args.files)
+    files = list(args.files)
+    if args.files_from:
+        files.extend(read_files_manifest(args.files_from))
+
+    all_passed, results = run_gates(args.trigger, files)
     print(f"Gates for '{args.trigger}':")
     print(format_results(results))
 

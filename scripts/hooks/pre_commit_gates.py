@@ -52,14 +52,19 @@ def _run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
     Explicit codec: on a cp1251/cp866 Windows host the default locale decode
     mangles output and can kill the reader thread while still returning
     rc=0 (commit b395a07 / task fix-cost-budget-hook-encoding-windows).
+
+    stdin defaults to DEVNULL so a child can never block waiting for input,
+    but `subprocess.run` rejects `input` and `stdin` together — a caller
+    feeding git a path list needs the pipe, so the default yields to it.
     """
+    if "input" not in kwargs:
+        kwargs.setdefault("stdin", subprocess.DEVNULL)
     return subprocess.run(  # noqa: S603
         args,
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
-        stdin=subprocess.DEVNULL,
         check=False,
         **kwargs,  # type: ignore[arg-type]
     )
@@ -89,11 +94,17 @@ def materialize_index(root: Path, files: list[str], dest: Path) -> list[str]:
 
     Returns the subset that actually landed — `checkout-index` skips paths it
     cannot resolve, and gating a file we failed to read would be a lie.
+
+    Paths go over stdin (`--stdin -z`), not argv: this is the second place the
+    32767-char Windows command line overflows on a whole-tree commit, and it
+    fails before the gates ever run. NUL-separated to match how `staged_files`
+    read them, since a git path may contain a newline.
     """
     prefix = str(dest).replace("\\", "/").rstrip("/") + "/"
     proc = _run(
-        ["git", "checkout-index", "--prefix=" + prefix, "--"] + files,
+        ["git", "checkout-index", "--stdin", "-z", "--prefix=" + prefix],
         cwd=str(root),
+        input="\0".join(files),
         timeout=_GIT_TIMEOUT,
     )
     if proc.returncode != 0 and proc.stderr.strip():
@@ -107,7 +118,30 @@ def materialize_index(root: Path, files: list[str], dest: Path) -> list[str]:
     return [f for f in files if (dest / f).is_file()]
 
 
-def run_gates(root: Path, workdir: Path, files: list[str]) -> tuple[int, str]:
+def write_manifest(path: Path, files: list[str]) -> None:
+    """Write the file list NUL-separated, mirroring how git handed it to us.
+
+    A git path may legally contain a newline, and `staged_files` reads them
+    with `-z` for exactly that reason; a line-separated manifest would split
+    such a path into two bogus entries and gate a file that does not exist.
+    """
+    path.write_text("\0".join(files), encoding="utf-8")
+
+
+def run_gates(root: Path, workdir: Path, files: list[str], manifest: Path) -> tuple[int, str]:
+    """Run the commit gates over `files`, passed by manifest rather than argv.
+
+    Windows caps a command line at 32767 characters. Measured on this repo:
+    979 repo-relative paths fit, 980 do not — and overflow does not surface as
+    "too many files", it surfaces as `FileNotFoundError: [WinError 206]`, whose
+    class name points at a missing file that does not exist. A whole-tree commit
+    (mass reformat, licence-header sweep, initial import) reaches that ceiling.
+
+    Batching was rejected (decision #56): several gates judge the file SET, not
+    each file — `tdd_order` would fail a batch holding sources whose tests
+    landed in another, and stack inference reads the union of extensions. That
+    changes what the gates mean, not just how they are invoked.
+    """
     gate_runner = root / "scripts" / "gate_runner.py"
     if not gate_runner.is_file():
         return 0, "[pre-commit] gate_runner.py not found — skipping (legacy checkout)."
@@ -117,12 +151,24 @@ def run_gates(root: Path, workdir: Path, files: list[str]) -> tuple[int, str]:
     env["TAUSIK_DIR"] = str(root / ".tausik")
     env["PYTHONIOENCODING"] = "utf-8"
 
-    proc = _run(
-        [sys.executable, str(gate_runner), "commit", "--files"] + files,
-        cwd=str(workdir),
-        env=env,
-        timeout=_GATE_TIMEOUT,
-    )
+    write_manifest(manifest, files)
+    try:
+        proc = _run(
+            [sys.executable, str(gate_runner), "commit", "--files-from", str(manifest)],
+            cwd=str(workdir),
+            env=env,
+            timeout=_GATE_TIMEOUT,
+        )
+    except OSError as exc:
+        # The manifest keeps the file list out of argv, so this is no longer the
+        # overflow path — but if the command line ever gets long again, say so
+        # instead of handing over a raw WinError.
+        return 1, (
+            f"[pre-commit] could not launch gate_runner: {exc}\n"
+            f"[pre-commit] {len(files)} staged file(s); the list was passed via "
+            f"{manifest}, so the command line itself is short.\n"
+            "[pre-commit] Bypass: git commit --no-verify (also skips the Mojang scan)."
+        )
     return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
 
@@ -148,12 +194,18 @@ def discard_tree(path: str) -> None:
         )
 
 
-def judge(root: Path, dest: Path, files: list[str]) -> int:
-    """Decide the commit against staged content materialized in `dest`.
+def judge(root: Path, scratch: Path, files: list[str]) -> int:
+    """Decide the commit against staged content materialized under `scratch`.
 
     Split out of `main` so the verdict is fully computed — and reported —
-    before the tree is discarded, rather than after.
+    before the scratch area is discarded, rather than after.
+
+    The materialized tree sits in `scratch/tree` so the file manifest can live
+    beside it without appearing to be a repo file the gates should judge.
     """
+    dest = scratch / "tree"
+    dest.mkdir(parents=True, exist_ok=True)
+
     present = materialize_index(root, files, dest)
     if not present:
         return 0
@@ -165,7 +217,7 @@ def judge(root: Path, dest: Path, files: list[str]) -> int:
         print(mojang_artifact_scan.format_report(violations), file=sys.stderr)
         return 1
 
-    code, output = run_gates(root, dest, present)
+    code, output = run_gates(root, dest, present, scratch / "staged-files.txt")
     if code == 0:
         return 0
 

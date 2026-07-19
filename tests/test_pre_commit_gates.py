@@ -22,13 +22,32 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "hooks"))
 sys.path.insert(0, str(REPO_ROOT / "bootstrap"))
 
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+import gate_runner  # noqa: E402
 import pre_commit_gates  # noqa: E402
 from bootstrap_git_hooks import install_git_hooks, uninstall_git_hooks  # noqa: E402
 
 # Fails the commit when any staged file it is handed exceeds 400 lines.
+# Mirrors the real gate_runner's file-list contract: --files from argv,
+# --files-from a NUL-separated manifest. Reports the count it received so a
+# test can prove every staged path actually arrived.
 STUB_GATE_RUNNER = """\
 import sys
-files = sys.argv[sys.argv.index("--files") + 1:]
+files = []
+if "--files" in sys.argv:
+    i = sys.argv.index("--files") + 1
+    while i < len(sys.argv) and not sys.argv[i].startswith("--"):
+        files.append(sys.argv[i]); i += 1
+if "--files-from" in sys.argv:
+    blob = open(sys.argv[sys.argv.index("--files-from") + 1], encoding="utf-8").read()
+    parts = blob.split("\\0") if "\\0" in blob else blob.splitlines()
+    files += [p for p in parts if p]
+import os
+# Sidecar next to this stub (outside the temp tree): the hook prints gate
+# output only on failure, so a passing run's count has nowhere else to go.
+with open(os.path.join(os.path.dirname(__file__), "received.txt"), "w") as fh:
+    fh.write(str(len(files)))
 bad = [f for f in files if len(open(f, encoding="utf-8", errors="replace").readlines()) > 400]
 if bad:
     print("STUB BLOCK: " + ", ".join(bad))
@@ -135,6 +154,155 @@ class TestJudgesTheIndexNotTheWorktree:
         dest.mkdir()
         pre_commit_gates.materialize_index(repo, ["pkg/mod.py"], dest)
         assert (dest / "pkg" / "mod.py").is_file()
+
+
+class TestFileListSurvivesTheArgvLimit:
+    """Windows caps a command line at 32767 chars; the list must not ride argv.
+
+    Measured on this repo by binary search: 979 repo-relative paths fit, 980 do
+    not (32786 chars at the boundary). Overflow surfaces as
+    `FileNotFoundError: [WinError 206]` — a class name that points at a missing
+    file, which is why the failure was unrecognisable before.
+
+    The count below is deliberately past that boundary. A test sized to what
+    already works would stay green on the broken version and prove nothing.
+    """
+
+    ARGV_LIMIT = 32767
+    FILE_COUNT = 1000
+    # Nested, realistically long paths. Short names like "m00042.py" would keep
+    # 1000 files inside the limit and the test would pass on the broken version
+    # too — sizing by file COUNT rather than command-line LENGTH is the trap
+    # this class is meant to catch.
+    DIR = "src/generated/handlers/subsystem"
+
+    def _stage_many(self, repo: Path) -> int:
+        (repo / self.DIR).mkdir(parents=True)
+        paths = [f"{self.DIR}/module_definition_{i:05d}.py" for i in range(self.FILE_COUNT)]
+        for rel in paths:
+            _write(repo, rel, 3)
+        _git(repo, "add", "-A")
+
+        argv_chars = sum(len(p) + 1 for p in paths)
+        assert argv_chars > self.ARGV_LIMIT, (
+            f"test is not exercising the limit: {argv_chars} chars < {self.ARGV_LIMIT}. "
+            "Raise FILE_COUNT or lengthen DIR."
+        )
+        return len(paths)
+
+    def test_more_files_than_argv_can_hold(self, repo: Path) -> None:
+        self._stage_many(repo)
+        result = _run_hook(repo)
+        assert result.returncode == 0, result.stderr
+        assert "WinError" not in result.stderr
+
+    def test_every_staged_file_reaches_the_runner(self, repo: Path) -> None:
+        """Counted on the runner's side, not trusted from the caller's.
+
+        Silently dropping paths would leave the gate green while judging less
+        than was committed — the decorative-gate failure this hook exists to
+        prevent, wearing a passing exit code.
+        """
+        n = self._stage_many(repo)
+        assert _run_hook(repo).returncode == 0
+        received = int((repo / "scripts" / "received.txt").read_text(encoding="utf-8"))
+        staged = len(_git(repo, "diff", "--cached", "--name-only").stdout.split())
+        assert received == staged == n + 1  # + scripts/gate_runner.py
+
+    def test_oversized_file_still_blocks_past_the_limit(self, repo: Path) -> None:
+        """The control: the gate must still JUDGE, not merely survive the size."""
+        self._stage_many(repo)
+        _write(repo, "huge.py", 500)
+        _git(repo, "add", "-A")
+
+        result = _run_hook(repo)
+        assert result.returncode == 1
+        assert "huge.py" in result.stderr
+
+
+class TestManifestTransport:
+    def test_newline_in_path_is_not_split(self, tmp_path: Path) -> None:
+        """git paths may contain newlines; staged_files reads them NUL-separated.
+
+        A line-separated manifest would turn one such path into two entries and
+        gate files that do not exist.
+        """
+        manifest = tmp_path / "files.txt"
+        weird = "src/od\nd.py"
+        pre_commit_gates.write_manifest(manifest, [weird, "plain.py"])
+
+        assert gate_runner.read_files_manifest(str(manifest)) == [weird, "plain.py"]
+
+    def test_hand_written_line_manifest_still_works(self, tmp_path: Path) -> None:
+        manifest = tmp_path / "files.txt"
+        manifest.write_text("a.py\nb.py\n", encoding="utf-8")
+        assert gate_runner.read_files_manifest(str(manifest)) == ["a.py", "b.py"]
+
+    def _real_runner(self, repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        """Invoke the REAL gate_runner — the stub cannot prove its argparse wiring."""
+        return subprocess.run(
+            [sys.executable, str(REPO_ROOT / "scripts" / "gate_runner.py"), "commit", *args],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            check=False,
+        )
+
+    def test_argv_files_still_judged(self, repo: Path) -> None:
+        """Backward compatibility: /commit and the docs invoke --files directly.
+
+        Asserted with a file that VIOLATES filesize, not a clean one — dropping
+        the list entirely also exits 0, so a passing clean file proves nothing.
+        """
+        _write(repo, "huge.py", 500)
+        result = self._real_runner(repo, "--files", "huge.py")
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "huge.py" in result.stdout
+
+    def test_manifest_files_are_judged(self, repo: Path) -> None:
+        """The mirror: --files-from must reach the gates, not merely parse."""
+        _write(repo, "huge.py", 500)
+        manifest = repo / "list.txt"
+        pre_commit_gates.write_manifest(manifest, ["huge.py"])
+
+        result = self._real_runner(repo, "--files-from", str(manifest))
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "huge.py" in result.stdout
+
+    def test_argv_and_manifest_combine(self, repo: Path) -> None:
+        _write(repo, "a.py", 3)
+        _write(repo, "huge.py", 500)
+        manifest = repo / "list.txt"
+        pre_commit_gates.write_manifest(manifest, ["huge.py"])
+
+        result = self._real_runner(repo, "--files", "a.py", "--files-from", str(manifest))
+        assert result.returncode == 1
+        assert "huge.py" in result.stdout
+
+    def test_manifest_lives_outside_the_materialized_tree(self, repo: Path) -> None:
+        """Gates run with cwd=tree; a manifest inside it would look like a repo file."""
+        seen: dict[str, Path] = {}
+        real = pre_commit_gates.run_gates
+
+        def _spy(root, workdir, files, manifest):
+            seen["workdir"] = Path(workdir)
+            seen["manifest"] = Path(manifest)
+            return real(root, workdir, files, manifest)
+
+        _write(repo, "f.py", 3)
+        _git(repo, "add", "f.py")
+        original = pre_commit_gates.run_gates
+        pre_commit_gates.run_gates = _spy
+        try:
+            os.chdir(repo)
+            pre_commit_gates.main()
+        finally:
+            pre_commit_gates.run_gates = original
+
+        assert seen["manifest"].parent == seen["workdir"].parent
+        assert seen["manifest"].parent != seen["workdir"]
 
 
 class TestCleanupNeverDecidesTheCommit:
