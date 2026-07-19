@@ -281,8 +281,14 @@ class TestManifestTransport:
         assert result.returncode == 1
         assert "huge.py" in result.stdout
 
-    def test_manifest_lives_outside_the_materialized_tree(self, repo: Path) -> None:
-        """Gates run with cwd=tree; a manifest inside it would look like a repo file."""
+    def test_manifest_lives_outside_the_materialized_tree(self, repo: Path, monkeypatch) -> None:
+        """Gates run with cwd=tree; a manifest inside it would look like a repo file.
+
+        monkeypatch, not bare `os.chdir` + hand-rolled restore: an unrestored
+        chdir outlives the whole pytest session (pytest only resets cwd once, at
+        the very end) and then poisons `monkeypatch.chdir` in later tests, which
+        capture the already-broken directory as the one to restore to.
+        """
         seen: dict[str, Path] = {}
         real = pre_commit_gates.run_gates
 
@@ -293,16 +299,101 @@ class TestManifestTransport:
 
         _write(repo, "f.py", 3)
         _git(repo, "add", "f.py")
-        original = pre_commit_gates.run_gates
-        pre_commit_gates.run_gates = _spy
-        try:
-            os.chdir(repo)
-            pre_commit_gates.main()
-        finally:
-            pre_commit_gates.run_gates = original
+        monkeypatch.setattr(pre_commit_gates, "run_gates", _spy)
+        monkeypatch.chdir(repo)
+        pre_commit_gates.main()
 
         assert seen["manifest"].parent == seen["workdir"].parent
         assert seen["manifest"].parent != seen["workdir"]
+
+    def test_single_entry_manifest_is_not_read_as_lines(self, tmp_path: Path) -> None:
+        """A separated one-entry manifest holds no NUL — the format must still be
+        identifiable, or a lone path gets split by an unrelated rule."""
+        manifest = tmp_path / "files.txt"
+        pre_commit_gates.write_manifest(manifest, ["only.py"])
+        # read_bytes, not read_text(newline=...): Path.read_text only grew that
+        # keyword in 3.13, and the point here is the raw byte anyway.
+        assert b"\0" in manifest.read_bytes()
+        assert gate_runner.read_files_manifest(str(manifest)) == ["only.py"]
+
+    def test_carriage_return_is_not_rewritten(self, tmp_path: Path) -> None:
+        """Round-trip fidelity, not newline translation.
+
+        Unreachable via git today — `verify_path()` rejects \\r and \\n in a path
+        (checked against git 2.49) — so this guards the transport itself, not a
+        live staging scenario.
+        """
+        manifest = tmp_path / "files.txt"
+        payload = ["src/od\rd.py", "plain.py"]
+        pre_commit_gates.write_manifest(manifest, payload)
+        assert gate_runner.read_files_manifest(str(manifest)) == payload
+
+
+class TestFailurePathsReportInsteadOfCrashing:
+    """Every way run_gates can fail must produce a report, not a traceback.
+
+    The original `except OSError` covered only the subprocess launch. Writing
+    the manifest sat outside the try, and `subprocess.TimeoutExpired` is not an
+    OSError subclass — so two realistic failures still reached the developer as
+    a stack trace, the exact symptom the handler was added to remove.
+    """
+
+    def _staged(self, repo: Path) -> Path:
+        _write(repo, "f.py", 3)
+        _git(repo, "add", "f.py")
+        return repo
+
+    def test_manifest_write_failure_is_reported(self, repo: Path, monkeypatch) -> None:
+        self._staged(repo)
+
+        def _boom(path, files):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(pre_commit_gates, "write_manifest", _boom)
+        monkeypatch.chdir(repo)
+        assert pre_commit_gates.main() == 1
+
+    def test_gate_timeout_is_reported_with_its_own_wording(
+        self, repo: Path, monkeypatch, capsys
+    ) -> None:
+        """Reusing the launch-failure text here would name the wrong cause."""
+        self._staged(repo)
+
+        real_run = pre_commit_gates._run
+
+        def _timeout(args, **kwargs):
+            # Only the gate invocation — repo_root() and staged_files() go
+            # through _run too, and blanket-raising would abort before the
+            # code path under test is ever reached.
+            if "--files-from" in args:
+                raise subprocess.TimeoutExpired(
+                    cmd="gate_runner", timeout=pre_commit_gates._GATE_TIMEOUT
+                )
+            return real_run(args, **kwargs)
+
+        monkeypatch.setattr(pre_commit_gates, "_run", _timeout)
+        monkeypatch.chdir(repo)
+
+        assert pre_commit_gates.main() == 1
+        err = capsys.readouterr().err
+        assert "exceeded" in err and str(pre_commit_gates._GATE_TIMEOUT) in err
+        assert "command line" not in err, "must not blame argv for a timeout"
+
+    def test_timeout_is_not_an_oserror(self) -> None:
+        """The premise of the separate except arm — asserted, not assumed."""
+        assert not issubclass(subprocess.TimeoutExpired, OSError)
+
+    def test_clean_run_is_unaffected(self, repo: Path, monkeypatch) -> None:
+        """CONTROL: broadening except must not swallow an ordinary verdict."""
+        self._staged(repo)
+        monkeypatch.chdir(repo)
+        assert pre_commit_gates.main() == 0
+
+    def test_blocking_run_is_unaffected(self, repo: Path, monkeypatch) -> None:
+        _write(repo, "huge.py", 500)
+        _git(repo, "add", "huge.py")
+        monkeypatch.chdir(repo)
+        assert pre_commit_gates.main() == 1
 
 
 class TestCleanupNeverDecidesTheCommit:

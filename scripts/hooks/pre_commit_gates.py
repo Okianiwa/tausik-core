@@ -97,8 +97,8 @@ def materialize_index(root: Path, files: list[str], dest: Path) -> list[str]:
 
     Paths go over stdin (`--stdin -z`), not argv: this is the second place the
     32767-char Windows command line overflows on a whole-tree commit, and it
-    fails before the gates ever run. NUL-separated to match how `staged_files`
-    read them, since a git path may contain a newline.
+    fails before the gates ever run. NUL-separated to match the `-z` form
+    `staged_files` already reads — git tolerates a missing trailing NUL here.
     """
     prefix = str(dest).replace("\\", "/").rstrip("/") + "/"
     proc = _run(
@@ -119,13 +119,25 @@ def materialize_index(root: Path, files: list[str], dest: Path) -> list[str]:
 
 
 def write_manifest(path: Path, files: list[str]) -> None:
-    """Write the file list NUL-separated, mirroring how git handed it to us.
+    """Write the file list NUL-TERMINATED, matching the `-z` form git gave us.
 
-    A git path may legally contain a newline, and `staged_files` reads them
-    with `-z` for exactly that reason; a line-separated manifest would split
-    such a path into two bogus entries and gate a file that does not exist.
+    Terminated, not separated, so the reader can tell the format from the bytes:
+    a one-entry separated manifest holds no NUL at all and would be
+    indistinguishable from a line-based one.
+
+    `newline=""` disables translation. Without it, text mode rewrites any `\\n`
+    on the way out and universal-newline mode rewrites any lone `\\r` on the way
+    back in, so a round trip is not guaranteed to return what it was given.
+
+    Note this is belt-and-braces, not a live hazard: git's `verify_path()`
+    rejects a path containing raw `\\r` or `\\n` outright (checked against git
+    2.49 — `git update-index --cacheinfo` answers "error: Invalid path"), and
+    Win32 will not create such a filename either. `staged_files` therefore
+    cannot hand us one. The NUL form is kept because it costs nothing and
+    matches the convention `staged_files` already reads with.
     """
-    path.write_text("\0".join(files), encoding="utf-8")
+    blob = "".join(f"{f}\0" for f in files)
+    path.write_text(blob, encoding="utf-8", newline="")
 
 
 def run_gates(root: Path, workdir: Path, files: list[str], manifest: Path) -> tuple[int, str]:
@@ -151,20 +163,34 @@ def run_gates(root: Path, workdir: Path, files: list[str], manifest: Path) -> tu
     env["TAUSIK_DIR"] = str(root / ".tausik")
     env["PYTHONIOENCODING"] = "utf-8"
 
-    write_manifest(manifest, files)
     try:
+        # Inside the try: writing the manifest touches a just-created scratch
+        # dir, and that write fails for the same Windows reasons the teardown
+        # does — an antivirus mid-scan, a full disk. Left outside, it reached
+        # the developer as a raw traceback.
+        write_manifest(manifest, files)
         proc = _run(
             [sys.executable, str(gate_runner), "commit", "--files-from", str(manifest)],
             cwd=str(workdir),
             env=env,
             timeout=_GATE_TIMEOUT,
         )
+    except subprocess.TimeoutExpired:
+        # Not an OSError, and _GATE_TIMEOUT is reachable on a slow run rather
+        # than exotic — so it needs its own arm and its own wording. Reusing the
+        # launch-failure text here would name the wrong cause.
+        return 1, (
+            f"[pre-commit] gate run exceeded {_GATE_TIMEOUT}s and was killed "
+            f"({len(files)} staged file(s)).\n"
+            "[pre-commit] Re-run, or bypass: git commit --no-verify "
+            "(also skips the Mojang scan)."
+        )
     except OSError as exc:
         # The manifest keeps the file list out of argv, so this is no longer the
         # overflow path — but if the command line ever gets long again, say so
         # instead of handing over a raw WinError.
         return 1, (
-            f"[pre-commit] could not launch gate_runner: {exc}\n"
+            f"[pre-commit] could not run gate_runner: {exc}\n"
             f"[pre-commit] {len(files)} staged file(s); the list was passed via "
             f"{manifest}, so the command line itself is short.\n"
             "[pre-commit] Bypass: git commit --no-verify (also skips the Mojang scan)."

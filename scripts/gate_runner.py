@@ -257,12 +257,15 @@ def check_file_conflicts(tasks: list[dict]) -> list[tuple[str, str, list[str]]]:
 def read_files_manifest(path: str) -> list[str]:
     """Read a file list written by the pre-commit hook.
 
-    NUL-separated when the hook writes it, because a git path may legally
-    contain a newline and `staged_files` already reads them NUL-separated —
-    a line-based manifest would silently split such a path in two. Falls back
-    to lines so a hand-written manifest also works.
+    The hook writes NUL-TERMINATED entries, so the presence of a NUL identifies
+    the format even for a single-entry list. Falls back to lines so a manifest
+    written by hand also works.
+
+    `newline=""` disables universal-newline translation, which would otherwise
+    rewrite a lone `\\r` into `\\n` and hand the gates a path that was never
+    staged.
     """
-    with open(path, encoding="utf-8") as fh:
+    with open(path, encoding="utf-8", newline="") as fh:
         blob = fh.read()
     parts = blob.split("\0") if "\0" in blob else blob.splitlines()
     return [p for p in parts if p]
