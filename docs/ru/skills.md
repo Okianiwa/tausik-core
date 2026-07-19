@@ -115,6 +115,17 @@ Skill'ы — intent-based инструкции, определяющие пов�
 
 Официальный vendor-репо: `https://github.com/Kibertum/tausik-skills`. Custom-репозитории поддерживаются — см. **[Skill Adaptation Guide](skill-adaptation.md)**.
 
+### Массовая установка через bundles
+
+`tausik skill install <name>` ставит по одному skill'у за раз. Для групп (integrations, data-formats, quality-pro, automation, workflow-helpers) используйте **bundles** — см. **[Skill Bundles](skill-bundles.md)**:
+
+```bash
+.tausik/tausik skill bundle list                    # посмотреть доступные bundles
+.tausik/tausik skill bundle install integrations    # поставить jira/bitrix24/confluence/sentry одним вызовом
+```
+
+> **Удалено в v1.4:** `/go`, `/next`, `/diff`, `/onboard`, `/init` — каждый дублировал встроенную функциональность. Таблица миграции — **[Skill Bundles Migration](skill-bundles-migration.md)**.
+
 ## Что дальше
 
 - **[Workflow](workflow.md)** — как skill'ы композятся в рабочий день
