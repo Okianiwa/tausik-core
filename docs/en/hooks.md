@@ -2,7 +2,7 @@
 
 # Hooks (v1.4)
 
-TAUSIK uses Claude Code hooks for automatic quality control. Hooks intercept agent actions **before** and **after** execution — they are gates, not instructions. **17 Python hooks + 1 shell `pre-commit` = 18 active hooks** ship with v1.4 (1.3.7 had 16 + 1 = 17; v1.4 adds `secret_scan.py`).
+TAUSIK uses Claude Code hooks for automatic quality control. Hooks intercept agent actions **before** and **after** execution — they are gates, not instructions. **18 Python hooks** ship with v1.4 (1.3.7 had 16 + 1 shell = 17; v1.4 adds `secret_scan.py`, and the shell `pre-commit` is replaced by the Python `pre_commit_gates.py`, which runs the commit gates instead of mypy).
 
 ## What Are Hooks
 
@@ -49,28 +49,33 @@ Hooks are scripts that run automatically with every agent action. They decide wh
 
 | Hook | When | What It Does |
 |------|------|-------------|
-| `pre-commit` (shell) | Before `git commit` | Runs `python -m mypy` against `scripts/` (uses `pyproject.toml` config). On exit ≠ 0 — **blocks the commit**. Optionally runs an incremental `codebase-rag` reindex (warn-only, capped at 5s); never blocks the commit because of RAG. |
+| `pre-commit` | Before `git commit` | (1) **Mojang artifact check** — `mojang_artifact_scan.py`, runs first: it is the only failure here that a follow-up commit cannot undo. (2) **Commit gates** via `gate_runner.py commit` (`ruff` + `filesize`, both blocking). Implementation: `scripts/hooks/pre_commit_gates.py`. |
+
+The Mojang check identifies artifacts **by content**, not by name: archives are opened and inspected for `net/minecraft/**` and `META-INF/versions/*/server-*.jar`, alongside forbidden paths (`async-platform/mc/{server,jre}/`) and loose extracted classes. So `mv minecraft_server.jar backup.jar` does not evade it, while the legitimate `gradle-wrapper.jar` (`org/gradle/**` inside) passes. `.gitignore` covers accidents but not `git add -f` — that flag exists precisely to stage ignored files — which is why the check sits on the commit.
+
+Gates judge the **staged** content, not the worktree: `git checkout-index` materializes the index into a temp tree that mirrors repo-relative paths (this matters — `filesize`'s `exempt_files` and `ruff`'s `per-file-ignores` are path-scoped). So "stage a clean version, then keep editing" yields neither a false pass nor a false block.
 
 This is **not** "scoped quality gates" — those run via `tausik verify` (heavy stack: pytest/tsc/cargo/phpstan/…) and are decoupled from `git commit` since the v1.4 Verify-First Contract.
 
-### Install (one-time)
+### Install
+
+Installed **automatically** by `bootstrap.py` (`bootstrap/bootstrap_git_hooks.py`) — nothing to copy by hand. `.git/hooks/pre-commit` gets a thin sh shim that resolves the live implementation under `scripts/hooks/` on every run, so editing the source takes effect immediately. A foreign (non-TAUSIK) `pre-commit` is never overwritten — bootstrap leaves it and warns.
+
+Reinstall manually:
 
 ```bash
-# Option A: copy the file
-cp scripts/hooks/pre-commit .git/hooks/pre-commit
-chmod +x .git/hooks/pre-commit
-
-# Option B (recommended): point git at the in-repo hooks dir so updates are picked up automatically
-git config core.hooksPath scripts/hooks
+python -c "import sys; sys.path.insert(0,'bootstrap'); from bootstrap_git_hooks import install_git_hooks; print(install_git_hooks('.'))"
 ```
 
-> **Windows caveat.** `pre-commit` is a Bash script with `timeout(1)` and POSIX `[ -f … ]`. Plain `cmd.exe` will fail to execute it. Use Git Bash, WSL, or a terminal that ships Bash + `timeout` on `PATH`. If your team runs Windows-only, replace the script with a `pre-commit.cmd` wrapper that calls `python -m mypy` directly and accepts the same exit contract.
+> **Do not use `git config core.hooksPath scripts/hooks`.** It used to be the recommended route; it now **disables** the installed hook, since git would look for hooks only in that directory. Installation goes through bootstrap into `.git/hooks/`.
+
+> **Windows.** The shim is POSIX sh (git on Windows runs hooks through its bundled sh) and the logic is Python. Python is taken from the project venv, falling back to the system one. No separate `.cmd` wrapper needed.
 
 ### Disable / bypass
 
-- One-off: `git commit --no-verify` (skips `core.hooksPath` entirely).
-- Temporarily: `git config --unset core.hooksPath`.
-- For CI without mypy: keep `core.hooksPath` unset on CI runners; the heavy verification runs via `tausik verify` regardless.
+- One-off: `git commit --no-verify`.
+- Session/CI: `TAUSIK_SKIP_COMMIT_GATES=1`.
+- Remove entirely: `bootstrap_git_hooks.uninstall_git_hooks('.')` (removes TAUSIK hooks only, leaves foreign ones).
 
 ## How It Works
 
