@@ -26,12 +26,13 @@ python scripts/gen_doc_constants.py --check     # exit 1 при дрейфе
 python scripts/gen_doc_constants.py             # перегенерировать JSON
 ```
 
-Или добавить в локальный `pre-commit` hook (в репо уже есть mypy hook;
-добавьте сверху):
+Или подключить к `pre-commit`. Сам хук (`scripts/hooks/pre_commit_gates.py`)
+запускает commit-гейты из конфига, поэтому правильное место для этой проверки —
+гейт с `trigger: commit`, а не правка `.git/hooks/pre-commit` руками: файл там —
+шим, поставленный bootstrap, и ручные правки затрутся при переустановке.
 
 ```bash
-# .git/hooks/pre-commit
-python scripts/hooks/check_docs.py || exit 1
+python scripts/hooks/check_docs.py || exit 1   # то, что должен делать гейт
 ```
 
 `scripts/hooks/check_docs.py` — тонкий wrapper, который:

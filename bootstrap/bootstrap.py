@@ -71,6 +71,7 @@ def get_lib_commit(lib_dir: str) -> str | None:
             cwd=lib_dir,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=5,
         )
         return result.stdout.strip() if result.returncode == 0 else None
@@ -361,6 +362,12 @@ def main() -> None:
 
     install_cli_wrapper(_bootstrap_dir, tausik_dir)
     print("  CLI wrapper: .tausik/tausik (or .tausik/tausik.cmd on Windows)")
+
+    from bootstrap_git_hooks import install_git_hooks
+
+    git_hooks = install_git_hooks(project_dir)
+    if git_hooks:
+        print(f"  Git hooks: {', '.join(git_hooks)} (bypass: git commit --no-verify)")
 
     run_post_bootstrap(args, project_dir)
 

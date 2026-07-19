@@ -26,12 +26,13 @@ python scripts/gen_doc_constants.py --check     # exit 1 on drift
 python scripts/gen_doc_constants.py             # regenerate the JSON
 ```
 
-Or wire it into your local `pre-commit` hook (the repo ships a basic
-mypy hook; add this on top):
+Or wire it into `pre-commit`. The hook itself (`scripts/hooks/pre_commit_gates.py`)
+runs the commit gates from config, so the right place for this check is a gate with
+`trigger: commit` — not a hand edit of `.git/hooks/pre-commit`: that file is a shim
+installed by bootstrap, and manual edits are overwritten on reinstall.
 
 ```bash
-# .git/hooks/pre-commit
-python scripts/hooks/check_docs.py || exit 1
+python scripts/hooks/check_docs.py || exit 1   # what the gate should run
 ```
 
 `scripts/hooks/check_docs.py` is a thin wrapper that:
