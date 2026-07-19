@@ -35,8 +35,13 @@ def run_command_gate(gate: dict, files: list[str]) -> tuple[bool, str]:
     if not cmd:
         return True, "No command configured."
 
+    # file_extensions gates relevance, NOT just path substitution: a gate that
+    # reads its scope from a config file (mypy -> [tool.mypy] in pyproject) has
+    # no {files} placeholder, and keying the filter on the placeholder let it
+    # run on doc-only commits — at severity=block that rejects a .md commit
+    # over an unrelated .py error.
     file_exts_raw = gate.get("file_extensions") or []
-    if file_exts_raw and "{files}" in cmd:
+    if file_exts_raw:
         allowed = {(e if e.startswith(".") else "." + e).lower() for e in file_exts_raw}
         files = [f for f in files if os.path.splitext(f)[1].lower() in allowed]
         if not files:

@@ -613,17 +613,39 @@ class TestCommandGateFileExtensions:
         assert len(calls) == 1
         assert "Main.PY" in calls[0]
 
-    def test_no_placeholder_filter_not_applied(self, monkeypatch):
-        """If command has no {files}, filter must not early-return."""
+    def test_filter_applies_without_placeholder(self, monkeypatch):
+        """No {files} in the command must still skip on a non-matching set.
+
+        Supersedes test_no_placeholder_filter_not_applied. That test froze the
+        opposite rule, but as a side effect of how 6bff067 implemented the
+        filter ("before {files} sub") rather than as a decision: every gate
+        carrying file_extensions back then also carried the placeholder, so the
+        no-placeholder branch was unreachable. The mypy gate makes it reachable
+        — it reads its scope from [tool.mypy] and takes no paths — and under
+        the old rule a docs-only commit ran a blocking type check.
+        """
         calls = []
         monkeypatch.setattr(
             "gate_runner.subprocess.run",
             lambda cmd, **kw: calls.append(cmd) or self._FakeOk(),
         )
-        gate = {"command": "ruff check .", "file_extensions": [".py"]}
-        passed, _ = run_command_gate(gate, ["a.yml"])
+        gate = {"command": "mypy --ignore-missing-imports", "file_extensions": [".py"]}
+        passed, output = run_command_gate(gate, ["docs/ru/hooks.md", "README.md"])
         assert passed is True
-        assert len(calls) == 1  # ran despite no matching files
+        assert "No files matching" in output
+        assert calls == []
+
+    def test_no_placeholder_still_runs_when_set_matches(self, monkeypatch):
+        """Counterpart: the filter gates relevance, it does not disable the gate."""
+        calls = []
+        monkeypatch.setattr(
+            "gate_runner.subprocess.run",
+            lambda cmd, **kw: calls.append(cmd) or self._FakeOk(),
+        )
+        gate = {"command": "mypy --ignore-missing-imports", "file_extensions": [".py"]}
+        passed, _ = run_command_gate(gate, ["docs/ru/hooks.md", "scripts/a.py"])
+        assert passed is True
+        assert len(calls) == 1
 
     def test_no_extensions_config_behaves_as_before(self, monkeypatch):
         """Backward compat: gate without file_extensions runs on everything."""
@@ -710,6 +732,38 @@ class TestDefaultGatesHaveFileExtensions:
 
     def test_mypy_has_py_extension(self):
         assert DEFAULT_GATES["mypy"].get("file_extensions") == [".py"]
+
+
+class TestMypyGateConfiguration:
+    """The mypy gate is live, and shaped by how the commit hook feeds it.
+
+    Task mypy-gate-restore-after-legacy-hook-removal: the gate shipped disabled
+    with `mypy {files}`, and the type check it advertised ran nowhere — the
+    legacy hook was never installed, and CI still swallows its own run.
+    """
+
+    def test_gate_is_enabled_and_blocking(self):
+        gate = DEFAULT_GATES["mypy"]
+        assert gate["enabled"] is True
+        # block is only defensible because the current tree is clean:
+        # `mypy` over 142 files reports no issues.
+        assert gate["severity"] == "block"
+
+    def test_runs_on_commit_and_task_done(self):
+        assert set(DEFAULT_GATES["mypy"]["trigger"]) == {"commit", "task-done"}
+
+    def test_command_takes_no_file_paths(self):
+        """{files} would bypass exclude and report errors in untouched files."""
+        assert "{files}" not in DEFAULT_GATES["mypy"]["command"]
+
+    def test_command_tolerates_missing_imports(self):
+        """The commit hook materializes only staged files, so imports dangle.
+
+        Without this flag a plain `mypy` fails with import-not-found on any
+        commit touching a module that imports a sibling — a blocking gate that
+        rejects nearly every commit.
+        """
+        assert "--ignore-missing-imports" in DEFAULT_GATES["mypy"]["command"]
 
 
 class TestResolveTestFilesForRelevant:

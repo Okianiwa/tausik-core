@@ -28,8 +28,12 @@ jobs:
       - name: Lint (ruff)
         run: ruff check scripts/ tests/ bootstrap/
 
+      # Verdict is enforced: `|| true` here meant the step reported green over
+      # 13 real errors, which is the same "advertised but inert" defect the
+      # legacy pre-commit hook had. Scope and per-module overrides come from
+      # [tool.mypy] in pyproject.toml, so CI and the commit gate agree.
       - name: Type check (mypy)
-        run: mypy scripts/ --ignore-missing-imports --no-error-summary || true
+        run: mypy --ignore-missing-imports
 
       - name: Security scan (bandit)
         run: bandit -r scripts/ -ll -q || true

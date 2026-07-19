@@ -27,11 +27,26 @@ UNIVERSAL_GATES: dict[str, dict] = {
         "file_extensions": [".py"],
     },
     "mypy": {
-        "enabled": False,
-        "severity": "warn",
-        "trigger": ["commit"],
-        "command": "mypy {files}",
-        "description": "Type-check with mypy before commit",
+        "enabled": True,
+        "severity": "block",
+        "trigger": ["commit", "task-done"],
+        # No {files}: mypy reads its scope from [tool.mypy] in pyproject
+        # (files=["scripts"], exclude=["scripts/hooks/"]). Passing staged paths
+        # explicitly broke three ways — it bypassed exclude, pulled the import
+        # graph in and reported errors in files the commit never touched, and
+        # silently dropped per-module overrides ("unused section(s)").
+        #
+        # --ignore-missing-imports is required by the commit trigger, not by
+        # taste: the hook judges the index from a temp tree holding only staged
+        # files, so every unstaged neighbour reads as a missing module and a
+        # plain `mypy` rejects any commit touching an importing module. The
+        # cost is bounded and measured — types crossing into files absent from
+        # the staged slice degrade to Any, while errors inside the slice
+        # (including between two files changed together) are still caught.
+        # task-done runs the same command against the real worktree, where the
+        # graph is complete, so that blind spot closes before the task closes.
+        "command": "mypy --ignore-missing-imports",
+        "description": "Type-check with mypy (staged slice on commit, full graph on task-done)",
         "file_extensions": [".py"],
     },
     "filesize": {

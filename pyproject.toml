@@ -21,6 +21,18 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
 
+[project.optional-dependencies]
+# Tools the blocking commit gates shell out to. They were undeclared while
+# `ruff` already gated commits: a checkout without them fails every .py commit
+# with "Gate error: [WinError 2]", which names neither the tool nor the fix.
+# Install with `pip install -e .[dev]` — CI installs the same set explicitly.
+dev = [
+    "mypy>=1.8",
+    "ruff>=0.5",
+    "pytest>=8.0",
+    "bandit>=1.7",
+]
+
 [project.urls]
 Homepage = "https://github.com/Kibertum/tausik-core"
 Documentation = "https://github.com/Kibertum/tausik-core/tree/main/docs"
@@ -91,6 +103,22 @@ disable_error_code = "attr-defined"
 module = "backend_queries"
 # Mixin — _q, _q1, epic_list, session_current resolved via SQLiteBackend
 disable_error_code = ["attr-defined", "no-any-return"]
+
+[[tool.mypy.overrides]]
+module = "backend_roadmap"
+# Mixin — _q, epic_list resolved via SQLiteBackend
+# (backend_queries.py:45 BackendQueriesMixin(.., BackendRoadmapMixin)
+#  -> project_backend.py:55 SQLiteBackend(BackendQueriesMixin, ..)).
+# Split out of backend_queries without carrying its override across.
+disable_error_code = "attr-defined"
+
+[[tool.mypy.overrides]]
+module = "service_hierarchy"
+# Mixin — _require_epic, _require_story resolved via ProjectService
+# (project_service.py:26 ProjectService(HierarchyMixin, ..), the methods
+#  themselves live at project_service.py:38+).
+# Split out of project_service without carrying its override across.
+disable_error_code = "attr-defined"
 
 [[tool.mypy.overrides]]
 module = "backend_migrations"

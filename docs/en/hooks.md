@@ -2,7 +2,7 @@
 
 # Hooks (v1.4)
 
-TAUSIK uses Claude Code hooks for automatic quality control. Hooks intercept agent actions **before** and **after** execution — they are gates, not instructions. **18 Python hooks** ship with v1.4 (1.3.7 had 16 + 1 shell = 17; v1.4 adds `secret_scan.py`, and the shell `pre-commit` is replaced by the Python `pre_commit_gates.py`, which runs the commit gates instead of mypy).
+TAUSIK uses Claude Code hooks for automatic quality control. Hooks intercept agent actions **before** and **after** execution — they are gates, not instructions. **18 Python hooks** ship with v1.4 (1.3.7 had 16 + 1 shell = 17; v1.4 adds `secret_scan.py`, and the shell `pre-commit` is replaced by the Python `pre_commit_gates.py`, which runs the commit gates). Type checking did not go missing in that swap: mypy is now one of those gates — see "The mypy gate" below.
 
 ## What Are Hooks
 
@@ -49,7 +49,7 @@ Hooks are scripts that run automatically with every agent action. They decide wh
 
 | Hook | When | What It Does |
 |------|------|-------------|
-| `pre-commit` | Before `git commit` | (1) **Mojang artifact check** — `mojang_artifact_scan.py`, runs first: it is the only failure here that a follow-up commit cannot undo. (2) **Commit gates** via `gate_runner.py commit` (`ruff` + `filesize` + `bootstrap_drift`, all blocking). Implementation: `scripts/hooks/pre_commit_gates.py`. |
+| `pre-commit` | Before `git commit` | (1) **Mojang artifact check** — `mojang_artifact_scan.py`, runs first: it is the only failure here that a follow-up commit cannot undo. (2) **Commit gates** via `gate_runner.py commit` (`ruff` + `mypy` + `filesize` + `bootstrap_drift`, all blocking). Implementation: `scripts/hooks/pre_commit_gates.py`. |
 
 The Mojang check identifies artifacts **by content**, not by name: archives are opened and inspected for `net/minecraft/**` and `META-INF/versions/*/server-*.jar`, alongside forbidden paths (`async-platform/mc/{server,jre}/`) and loose extracted classes. So `mv minecraft_server.jar backup.jar` does not evade it, while the legitimate `gradle-wrapper.jar` (`org/gradle/**` inside) passes. `.gitignore` covers accidents but not `git add -f` — that flag exists precisely to stage ignored files — which is why the check sits on the commit.
 
@@ -66,6 +66,16 @@ The file list does not travel in argv. Windows caps a command line at 32767 char
 Gates judge the **staged** content, not the worktree: `git checkout-index` materializes the index into a temp tree that mirrors repo-relative paths (this matters — `filesize`'s `exempt_files` and `ruff`'s `per-file-ignores` are path-scoped). So "stage a clean version, then keep editing" yields neither a false pass nor a false block.
 
 This is **not** "scoped quality gates" — those run via `tausik verify` (heavy stack: pytest/tsc/cargo/phpstan/…) and are decoupled from `git commit` since the v1.4 Verify-First Contract.
+
+### The mypy gate
+
+TAUSIK advertised type checking for a long time without running it anywhere. The legacy shell `pre-commit` declared `python -m mypy` blocking, but was never installed into `.git/hooks/` — and had it been, it would have rejected every commit, because mypy was not a project dependency. A CI step existed but ended in `|| true`, reporting green over 13 genuine errors. Three places claimed the check; none performed it.
+
+The `mypy` gate is enabled, blocking, and runs on **two** triggers — `commit` and `task-done`. The pair is dictated by how the hook feeds its gates. On commit the index is judged: `git checkout-index` materializes **only staged** files into a temp tree. `ruff` copes because it works per file; mypy is cross-module, and every unchanged neighbour reads to it as a missing module. Hence `--ignore-missing-imports` in the command — without it a blocking gate would reject nearly any commit touching a module that imports a sibling, citing `import-not-found` in a file the author wrote correctly.
+
+The cost of that flag is measured and bounded: errors **inside** the staged slice are caught, including types crossing between two files changed together; references into modules absent from the slice degrade to `Any` and go silently unchecked. The second trigger closes that blind spot — on `task-done` the same command runs against the real worktree, where the graph is complete and the verdict is whole. CI runs the same check.
+
+The command deliberately takes **no** paths (there is no `{files}` in it): mypy reads its scope from `[tool.mypy]` in `pyproject.toml`. Explicit paths broke that three ways — they bypassed `exclude` (dragging in `scripts/hooks/`, excluded over dual-module-names), pulled in the import graph and reported errors in files the commit never touched, and silently dropped some per-module overrides with an `unused section(s)` note. `file_extensions: [".py"]` is kept and governs **relevance**: a docs-only commit skips the gate rather than running it.
 
 ### Install
 

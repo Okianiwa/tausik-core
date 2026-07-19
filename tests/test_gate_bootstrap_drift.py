@@ -474,6 +474,10 @@ class TestWiredIntoGateRunner:
                     "gates": {
                         "ruff": {"enabled": False},
                         "filesize": {"enabled": False},
+                        # Off for the same reason as ruff/filesize: these cases
+                        # isolate bootstrap_drift. mypy needed no entry while it
+                        # shipped disabled; it is a live blocking gate now.
+                        "mypy": {"enabled": False},
                         "bootstrap_drift": {"enabled": True},
                     },
                 }
