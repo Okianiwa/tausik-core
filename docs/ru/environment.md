@@ -22,6 +22,7 @@
 | `TAUSIK_SKIP_PUSH_HOOK=1` | Полный bypass git_push_gate (debug-only). Production-bypass — single-use ticket-файл от `tausik push-ok` (TTL 60s, привязан к SHA HEAD); env `TAUSIK_ALLOW_PUSH` удалён в v1.4 как broken-by-design. |
 | `TAUSIK_PUSH_TICKET_PATH` | Override пути к ticket-файлу для git_push_gate (тесты) |
 | `TAUSIK_SKIP_MEMORY_HOOK=1` | Bypass memory pretool block |
+| `TAUSIK_HOOK_FAIL_OPEN=1` | task_gate при ошибке запроса к БД РАЗРЕШАЕТ правку вместо блокировки. По умолчанию (решение #58) — fail-secure: ветка достижима только когда файл БД существует, то есть отказ означает реальную поломку. Заменил прежний `TAUSIK_HOOK_FAIL_SECURE=1`, у которого смысл был обратным |
 | `TAUSIK_E2E=1` | Включить тяжёлые e2e тесты |
 | `PYTHONIOENCODING=utf-8` | Windows: предотвращает crash на Unicode выводе |
 | `PYTHONUTF8=1` | Windows: UTF-8 mode для всего Python процесса |

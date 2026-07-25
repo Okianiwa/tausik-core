@@ -35,8 +35,15 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+# `.exe` is explicit because `git.exe push` is idiomatic on Windows and used
+# to sail past this gate. The option group covers any global git flag, not
+# just `-c`: `git --no-pager push` and `git -C dir push` were bypasses too.
+# Flags are matched before the subcommand only, so `git commit -m ...` cannot
+# reach `push` through this pattern.
 _GIT_PUSH_RE = re.compile(
-    r"(?:^|[\s;&|()`])(?:[/\w.\\-]*[/\\])?git(?:\s+-c\s+\S+)*\s+push\b",
+    r"(?:^|[\s;&|()`])(?:[/\w.\\-]*[/\\])?git(?:\.exe)?"
+    r"(?:\s+(?:-[cC]\s+\S+|--?[\w-]+(?:=\S+)?))*"
+    r"\s+push\b",
     re.IGNORECASE,
 )
 

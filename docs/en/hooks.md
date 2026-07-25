@@ -12,22 +12,22 @@ Hooks are scripts that run automatically with every agent action. They decide wh
 
 | Hook | When | What It Does |
 |------|------|-------------|
-| `task_gate.py` | Before Write/Edit | Blocks file changes if no active task (SENAR Rule 9.1) |
-| `bash_firewall.py` | Before Bash | Blocks dangerous commands (rm -rf, DROP TABLE, force push, etc.) |
-| `git_push_gate.py` | Before git push | Blocks unless `.tausik/.push_ticket.json` is fresh, single-use, and bound to HEAD SHA. `/ship` and `/commit` run `tausik push-ok && git push` after your "y" — `push-ok` writes the 60-second ticket; the hook consumes it on the next push. |
+| `task_gate.py` | Before any file write: Write, Edit, MultiEdit, NotebookEdit, `mcp__windows-mcp__FileSystem`, serena symbol editors | Blocks file changes if no active task (SENAR Rule 9.1). Read-only FileSystem modes (`read`/`list`/`search`/`info`) pass through. A failing DB query BLOCKS (fail-secure, decision #58); `TAUSIK_HOOK_FAIL_OPEN=1` restores the permissive behaviour |
+| `bash_firewall.py` | Before Bash, PowerShell, `mcp__windows-mcp__PowerShell` | Blocks dangerous commands (rm -rf, DROP TABLE, force push, etc.) |
+| `git_push_gate.py` | Before git push from any shell tool (Bash, PowerShell, `mcp__windows-mcp__PowerShell`) | Blocks unless `.tausik/.push_ticket.json` is fresh, single-use, and bound to HEAD SHA. `/ship` and `/commit` run `tausik push-ok && git push` after your "y" — `push-ok` writes the 60-second ticket; the hook consumes it on the next push. |
 | `memory_pretool_block.py` | Before Write to auto-memory | Blocks cross-project writes unless prompt contains `confirm: cross-project` |
-| `secret_scan.py` (v1.4) | Before Write/Edit/MultiEdit | Scans `tool_input` for likely secrets (AWS/GitHub/Slack/Stripe/OpenAI/Anthropic tokens, JWT, private-key blocks, generic `password`/`api_key` literals). Warns by default; set `TAUSIK_SECRET_SCAN_STRICT=1` to block. (SENAR Rule 10.12) |
+| `secret_scan.py` (v1.4) | Before any file write (same set as `task_gate.py`) | Scans `tool_input` for likely secrets (AWS/GitHub/Slack/Stripe/OpenAI/Anthropic tokens, JWT, private-key blocks, generic `password`/`api_key` literals). Warns by default; set `TAUSIK_SECRET_SCAN_STRICT=1` to block. (SENAR Rule 10.12) |
 
 ## PostToolUse — Reactions After an Action
 
 | Hook | When | What It Does |
 |------|------|-------------|
-| `auto_format.py` | After Write/Edit | Auto-formats with ruff/prettier/gofmt + logs "Modified: X" to task |
+| `auto_format.py` | After Write/Edit/MultiEdit/NotebookEdit | Auto-formats with ruff/prettier/gofmt + logs "Modified: X" to task |
 | `task_call_counter.py` | After any tool call | Increments per-task `call_actual` counter; warns at 1.5×budget |
 | `activity_event.py` | After any tool call | Records activity timestamps for **gap-based active-time** session metric (SENAR Rule 9.2) |
 | `memory_posttool_audit.py` | After Write to auto-memory | Audits cross-project leakage (uses `memory_markers.py` regex library) and warns |
 | `brain_post_webfetch.py` | After WebFetch | Auto-caches result in shared brain `web_cache` for token reuse |
-| `task_done_verify.py` | After `task_done` / `task_done` | Audits AC evidence via 5 rule-based checks (Ralph-mode-lite). Matcher v1.4: `tausik_task_done\|tausik_task_done\|Bash` |
+| `task_done_verify.py` | After `task_done` / `task_done` | Audits AC evidence via 5 rule-based checks (Ralph-mode-lite). Covers the `tausik_task_done` MCP tool plus CLI closes from any shell tool (Bash, PowerShell, `mcp__windows-mcp__PowerShell`) |
 
 ## SessionStart / SessionEnd
 

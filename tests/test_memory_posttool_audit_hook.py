@@ -166,9 +166,7 @@ class TestNonAuditedPaths:
     def test_outside_memory_is_quiet(self, tmp_path, fake_home):
         _setup_tausik(tmp_path)
         outside = tmp_path / "outside.md"
-        outside.write_text(
-            "task mem-pretool-hook done, scripts/foo.py", encoding="utf-8"
-        )
+        outside.write_text("task mem-pretool-hook done, scripts/foo.py", encoding="utf-8")
         result = _run(
             tmp_path,
             {
@@ -196,9 +194,7 @@ class TestNonAuditedPaths:
 class TestGraceful:
     def test_missing_file_is_quiet(self, tmp_path, fake_home):
         _setup_tausik(tmp_path)
-        path = f"{fake_home}/.claude/projects/x/memory/does_not_exist.md".replace(
-            "\\", "/"
-        )
+        path = f"{fake_home}/.claude/projects/x/memory/does_not_exist.md".replace("\\", "/")
         result = _run(
             tmp_path,
             {"tool_name": "Write", "tool_input": {"file_path": path}},
@@ -280,6 +276,7 @@ class TestSettingsGeneration:
     def test_claude_settings_registers_audit(self, tmp_path):
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bootstrap"))
         from bootstrap_generate import generate_settings_claude
+        from bootstrap_hooks import BUILTIN_FILE_WRITE_MATCHER
 
         target = tmp_path / ".claude"
         target.mkdir()
@@ -289,11 +286,12 @@ class TestSettingsGeneration:
         assert "PostToolUse" in hooks
         matched = False
         for entry in hooks["PostToolUse"]:
-            if not any(
-                "memory_posttool_audit.py" in h["command"] for h in entry["hooks"]
-            ):
+            if not any("memory_posttool_audit.py" in h["command"] for h in entry["hooks"]):
                 continue
-            assert entry["matcher"] == "Write|Edit|MultiEdit", entry
+            # Shared constant, not a literal — the literal is what pinned
+            # this matcher while NotebookEdit went unaudited. Coverage lives
+            # in tests/test_hook_tool_coverage.py.
+            assert entry["matcher"] == BUILTIN_FILE_WRITE_MATCHER, entry
             matched = True
         assert matched, "memory_posttool_audit.py not registered in Claude PostToolUse"
 
@@ -309,10 +307,8 @@ class TestSettingsGeneration:
         assert "PostToolUse" in hooks
         matched = False
         for entry in hooks["PostToolUse"]:
-            if not any(
-                "memory_posttool_audit.py" in h["command"] for h in entry["hooks"]
-            ):
+            if not any("memory_posttool_audit.py" in h["command"] for h in entry["hooks"]):
                 continue
-            assert entry["matcher"] == "Write|Edit|MultiEdit", entry
+            assert entry["matcher"] == "Write|Edit|MultiEdit|NotebookEdit", entry
             matched = True
         assert matched, "memory_posttool_audit.py not registered in Qwen PostToolUse"

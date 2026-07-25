@@ -23,9 +23,7 @@ _HOME = os.path.expanduser("~").replace("\\", "/")
 _MEMORY_ROOT = f"{_HOME}/.claude/projects/test-proj/memory"
 
 
-def _run(
-    project_dir, payload: dict, extra_env: dict | None = None
-) -> subprocess.CompletedProcess:
+def _run(project_dir, payload: dict, extra_env: dict | None = None) -> subprocess.CompletedProcess:
     env = {
         **os.environ,
         "CLAUDE_PROJECT_DIR": str(project_dir),
@@ -116,9 +114,7 @@ class TestBlocksMemoryWrites:
             tmp_path,
             {
                 "tool_name": "Write",
-                "tool_input": {
-                    "file_path": "~/.claude/projects/test-proj/memory/foo.md"
-                },
+                "tool_input": {"file_path": "~/.claude/projects/test-proj/memory/foo.md"},
                 "transcript_path": "",
             },
         )
@@ -145,9 +141,7 @@ class TestBlocksMemoryWrites:
             tmp_path,
             {
                 "tool_name": "Write",
-                "tool_input": {
-                    "file_path": f"{_HOME}/.claude/agents/my-agent/memory/notes.md"
-                },
+                "tool_input": {"file_path": f"{_HOME}/.claude/agents/my-agent/memory/notes.md"},
                 "transcript_path": "",
             },
         )
@@ -160,9 +154,7 @@ class TestBlocksMemoryWrites:
             tmp_path,
             {
                 "tool_name": "Write",
-                "tool_input": {
-                    "file_path": f"{_HOME}/.claude/plugins/foo/memory/sub/f.md"
-                },
+                "tool_input": {"file_path": f"{_HOME}/.claude/plugins/foo/memory/sub/f.md"},
                 "transcript_path": "",
             },
         )
@@ -606,6 +598,7 @@ class TestSettingsGeneration:
     def test_claude_settings_registers_hook(self, tmp_path):
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bootstrap"))
         from bootstrap_generate import generate_settings_claude
+        from bootstrap_hooks import FILE_WRITE_MATCHER
 
         target = tmp_path / ".claude"
         target.mkdir()
@@ -615,11 +608,13 @@ class TestSettingsGeneration:
         assert "PreToolUse" in hooks
         matched = False
         for entry in hooks["PreToolUse"]:
-            if not any(
-                "memory_pretool_block.py" in h["command"] for h in entry["hooks"]
-            ):
+            if not any("memory_pretool_block.py" in h["command"] for h in entry["hooks"]):
                 continue
-            assert entry["matcher"] == "Write|Edit|MultiEdit", entry
+            # Compared against the shared constant rather than a literal: the
+            # literal used to pin this matcher to Write|Edit|MultiEdit, which
+            # is how NotebookEdit and the MCP editors slipped past the memory
+            # guard. Coverage is asserted in tests/test_hook_tool_coverage.py.
+            assert entry["matcher"] == FILE_WRITE_MATCHER, entry
             matched = True
         assert matched, "memory_pretool_block.py not registered in Claude PreToolUse"
 
@@ -635,11 +630,11 @@ class TestSettingsGeneration:
         assert "PreToolUse" in hooks
         matched = False
         for entry in hooks["PreToolUse"]:
-            if not any(
-                "memory_pretool_block.py" in h["command"] for h in entry["hooks"]
-            ):
+            if not any("memory_pretool_block.py" in h["command"] for h in entry["hooks"]):
                 continue
-            assert entry["matcher"] == "Write|Edit|MultiEdit", entry
+            # Qwen keeps a plain alternation (see bootstrap_qwen.py), but it
+            # must still name every write tool.
+            assert entry["matcher"] == "Write|Edit|MultiEdit|NotebookEdit", entry
             matched = True
         assert matched, "memory_pretool_block.py not registered in Qwen PreToolUse"
 

@@ -19,11 +19,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from _common import BUILTIN_FILE_WRITE_TOOL_NAMES, edited_file_paths  # noqa: E402
 from memory_markers import detect_markers  # noqa: E402
 from memory_pretool_block import is_in_claude_memory  # noqa: E402
 
 
-_AUDITED_TOOLS = ("Write", "Edit", "MultiEdit")
+_AUDITED_TOOLS = BUILTIN_FILE_WRITE_TOOL_NAMES
 _MAX_REPORTED = 5
 
 
@@ -58,12 +59,10 @@ def main() -> int:
     tool_input = event.get("tool_input") or {}
     if not isinstance(tool_input, dict):
         return 0
-    file_path = tool_input.get("file_path") or ""
-    if not isinstance(file_path, str):
+    guarded = [p for p in edited_file_paths(tool_input) if is_in_claude_memory(p)]
+    if not guarded:
         return 0
-
-    if not is_in_claude_memory(file_path):
-        return 0
+    file_path = guarded[0]
 
     expanded = os.path.expanduser(file_path)
     if not os.path.isfile(expanded):
@@ -79,10 +78,7 @@ def main() -> int:
 
     head = matches[:_MAX_REPORTED]
     extra = len(matches) - len(head)
-    lines = [
-        f"AUDIT: auto-memory write at {file_path} contains {len(matches)} "
-        "project marker(s):"
-    ]
+    lines = [f"AUDIT: auto-memory write at {file_path} contains {len(matches)} project marker(s):"]
     for m in head:
         lines.append(f"  - [{m.kind}] {m.match}")
     if extra > 0:

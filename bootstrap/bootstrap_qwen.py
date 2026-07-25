@@ -72,11 +72,27 @@ def generate_settings_qwen(
             "args": [_p(brain_server), "--project", _p(project_dir)],
         }
 
+    # Qwen Code's matcher semantics are undocumented and, unlike Claude
+    # Code's, we have not read its implementation. So these stay plain
+    # alternations rather than the anchored `^(?:...)$` form used in
+    # bootstrap_hooks.py — a bare list works whether the host compares names
+    # exactly or searches them as a regex.
+    #
+    # The MCP names ARE listed. Leaving them out was the same mistake this
+    # change exists to fix: under exact-split matching, omitting
+    # mcp__windows-mcp__PowerShell leaves session #33's push bypass open
+    # here. Adding them is safe under both readings — an extra alternative
+    # when names are compared exactly, an extra substring when searched.
+    # Coverage under Qwen is otherwise untested: the MCP file editors are
+    # still absent, tracked as a follow-up.
+    _write_tools = "Write|Edit|MultiEdit|NotebookEdit"
+    _shell_tools = "Bash|PowerShell|mcp__windows-mcp__PowerShell"
+
     # Hooks — same SENAR enforcement as Claude Code
     hooks = {
         "PreToolUse": [
             {
-                "matcher": "Write|Edit",
+                "matcher": _write_tools,
                 "hooks": [
                     {
                         "type": "command",
@@ -86,7 +102,7 @@ def generate_settings_qwen(
                 ],
             },
             {
-                "matcher": "Write|Edit|MultiEdit",
+                "matcher": _write_tools,
                 "hooks": [
                     {
                         "type": "command",
@@ -96,7 +112,7 @@ def generate_settings_qwen(
                 ],
             },
             {
-                "matcher": "Write|Edit|MultiEdit",
+                "matcher": _write_tools,
                 "hooks": [
                     {
                         "type": "command",
@@ -106,7 +122,7 @@ def generate_settings_qwen(
                 ],
             },
             {
-                "matcher": "Bash",
+                "matcher": _shell_tools,
                 "hooks": [
                     {
                         "type": "command",
@@ -116,8 +132,10 @@ def generate_settings_qwen(
                 ],
             },
             {
-                "matcher": "Bash",
-                "if": "Bash(git push *)",
+                # `if` dropped here as in bootstrap_hooks.py — selecting
+                # pushes is git_push_gate's own regex, which works for any
+                # tool that carries `command`.
+                "matcher": _shell_tools,
                 "hooks": [
                     {
                         "type": "command",
@@ -139,7 +157,7 @@ def generate_settings_qwen(
         ],
         "PostToolUse": [
             {
-                "matcher": "Write|Edit",
+                "matcher": _write_tools,
                 "hooks": [
                     {
                         "type": "command",
@@ -149,7 +167,7 @@ def generate_settings_qwen(
                 ],
             },
             {
-                "matcher": "Write|Edit|MultiEdit",
+                "matcher": _write_tools,
                 "hooks": [
                     {
                         "type": "command",
@@ -162,7 +180,7 @@ def generate_settings_qwen(
                 "matcher": (
                     "mcp__tausik-project__tausik_task_done"
                     "|mcp__tausik-project__tausik_task_done_v2"
-                    "|Bash"
+                    f"|{_shell_tools}"
                 ),
                 "hooks": [
                     {

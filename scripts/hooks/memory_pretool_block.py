@@ -24,6 +24,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _common import (  # noqa: E402
+    FILE_WRITE_TOOL_NAMES,
+    edited_file_paths,
     is_tausik_project,
     last_user_prompt_text,
     marker_present_anchored,
@@ -31,7 +33,7 @@ from _common import (  # noqa: E402
 
 
 _BYPASS_MARKER = "confirm: cross-project"
-_BLOCKED_TOOLS = ("Write", "Edit", "MultiEdit")
+_BLOCKED_TOOLS = FILE_WRITE_TOOL_NAMES
 
 
 def _read_stdin_json() -> dict:
@@ -99,19 +101,17 @@ def main() -> int:
     tool_input = event.get("tool_input") or {}
     if not isinstance(tool_input, dict):
         return 0
-    file_path = tool_input.get("file_path") or ""
-    if not isinstance(file_path, str):
+    # Every candidate path, not just the first: a FileSystem move names both
+    # a source and a destination, and only the destination is written to.
+    guarded = [p for p in edited_file_paths(tool_input) if _is_in_claude_memory(p)]
+    if not guarded:
         return 0
-
-    if not _is_in_claude_memory(file_path):
-        return 0
-
     if _bypass_present(event.get("transcript_path") or ""):
         return 0
 
     print(
         "BLOCKED: Writing to Claude auto-memory (~/.claude/**/memory/) "
-        "from a TAUSIK project.\n"
+        f"from a TAUSIK project.\nTarget: {guarded[0]}\n"
         "Is this project-specific knowledge? -> .tausik/tausik memory add\n"
         "Is this a cross-project user preference? -> reply explicitly with "
         "the marker `confirm: cross-project` in your next message, then retry.",

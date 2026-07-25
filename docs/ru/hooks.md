@@ -12,22 +12,22 @@ TAUSIK использует хуки Claude Code для автоматическ
 
 | Хук | Когда | Что делает |
 |------|-------|-----------|
-| `task_gate.py` | Перед Write/Edit | Блокирует изменения файлов, если нет активной задачи (SENAR Rule 9.1) |
-| `bash_firewall.py` | Перед Bash | Блокирует опасные команды (rm -rf, DROP TABLE, force push, и т.д.) |
-| `git_push_gate.py` | Перед git push | Блокирует push без свежего, одноразового тикета `.tausik/.push_ticket.json`, привязанного к SHA HEAD. `/ship` и `/commit` запускают `tausik push-ok && git push` после вашего "y" — `push-ok` пишет 60-секундный тикет, хук съедает его на следующем push. |
+| `task_gate.py` | Перед любой записью в файл: Write, Edit, MultiEdit, NotebookEdit, `mcp__windows-mcp__FileSystem`, редакторы символов serena | Блокирует изменения файлов, если нет активной задачи (SENAR Rule 9.1). Read-only режимы FileSystem (`read`/`list`/`search`/`info`) пропускаются. При ошибке запроса к БД БЛОКИРУЕТ (fail-secure, решение #58); `TAUSIK_HOOK_FAIL_OPEN=1` возвращает разрешающее поведение |
+| `bash_firewall.py` | Перед Bash, PowerShell, `mcp__windows-mcp__PowerShell` | Блокирует опасные команды (rm -rf, DROP TABLE, force push, и т.д.) |
+| `git_push_gate.py` | Перед git push из любого инструмента оболочки (Bash, PowerShell, `mcp__windows-mcp__PowerShell`) | Блокирует push без свежего, одноразового тикета `.tausik/.push_ticket.json`, привязанного к SHA HEAD. `/ship` и `/commit` запускают `tausik push-ok && git push` после вашего "y" — `push-ok` пишет 60-секундный тикет, хук съедает его на следующем push. |
 | `memory_pretool_block.py` | Перед Write в auto-memory | Блокирует cross-project записи без `confirm: cross-project` в промпте |
-| `secret_scan.py` (v1.4) | Перед Write/Edit/MultiEdit | Сканирует `tool_input` на типичные секреты (AWS/GitHub/Slack/Stripe/OpenAI/Anthropic токены, JWT, блоки приватного ключа, generic `password`/`api_key`). По умолчанию warning; `TAUSIK_SECRET_SCAN_STRICT=1` — блокировка. (SENAR Rule 10.12) |
+| `secret_scan.py` (v1.4) | Перед любой записью в файл (тот же набор, что у `task_gate.py`) | Сканирует `tool_input` на типичные секреты (AWS/GitHub/Slack/Stripe/OpenAI/Anthropic токены, JWT, блоки приватного ключа, generic `password`/`api_key`). По умолчанию warning; `TAUSIK_SECRET_SCAN_STRICT=1` — блокировка. (SENAR Rule 10.12) |
 
 ## PostToolUse — реакции после действия
 
 | Хук | Когда | Что делает |
 |------|-------|-----------|
-| `auto_format.py` | После Write/Edit | Авто-форматирование через ruff/prettier/gofmt + лог "Modified: X" в задачу |
+| `auto_format.py` | После Write/Edit/MultiEdit/NotebookEdit | Авто-форматирование через ruff/prettier/gofmt + лог "Modified: X" в задачу |
 | `task_call_counter.py` | После любого tool call | Инкрементирует per-task `call_actual` счётчик; warning'ит на 1.5×budget |
 | `activity_event.py` | После любого tool call | Записывает activity-таймстемпы для **gap-based active-time** метрики (SENAR Rule 9.2) |
 | `memory_posttool_audit.py` | После Write в auto-memory | Аудитит cross-project leakage (использует regex-библиотеку `memory_markers.py`) и предупреждает |
 | `brain_post_webfetch.py` | После WebFetch | Авто-кешит результат в shared brain `web_cache` для token reuse |
-| `task_done_verify.py` | После `task_done` / `task_done` | Аудитит AC evidence через 5 правило-base проверок (Ralph-mode-lite). Matcher v1.4: `tausik_task_done\|tausik_task_done\|Bash` |
+| `task_done_verify.py` | После `task_done` / `task_done` | Аудитит AC evidence через 5 правило-base проверок (Ralph-mode-lite). Покрывает MCP-инструмент `tausik_task_done` и закрытие задачи через CLI из любого инструмента оболочки (Bash, PowerShell, `mcp__windows-mcp__PowerShell`) |
 
 ## SessionStart / SessionEnd
 

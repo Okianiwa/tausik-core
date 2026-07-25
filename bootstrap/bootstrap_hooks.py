@@ -15,6 +15,55 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+# How Claude Code matches a matcher against a tool name (2.1.215, function
+# B8y in the bundle): a matcher built only from [a-zA-Z0-9_|] is NOT a regex
+# — it is split on `|` and compared for EXACT equality. Any other character
+# routes it to `new RegExp(matcher).test(name)`, an UNANCHORED search. So
+# `Write|Edit` never matches `MultiEdit`, while `Write|Edit|mcp__x-y__Z`
+# silently switches the whole line to substring semantics. Every matcher
+# below is written anchored — `^(?:...)$` — so it means the same thing in
+# either branch instead of depending on which one fired.
+#
+# The alias table (fSi in the bundle) maps only Task/KillShell/BashOutput and
+# friends; it contains neither MultiEdit->Edit nor PowerShell->Bash, so no
+# alias covers these gaps for us.
+
+# Tools that can change a file in the repository. Guards that enforce
+# "no code without a task" must see all of them. MultiEdit is kept as
+# future-proofing: 2.1.215 has no such built-in tool, but the matcher
+# should survive its return. NotebookEdit and the MCP file editors are
+# live paths today — they were how QG-0 could be bypassed entirely.
+_FILE_WRITE_TOOLS = (
+    "Write|Edit|MultiEdit|NotebookEdit"
+    "|mcp__windows-mcp__FileSystem"
+    "|mcp__serena__(?:replace_symbol_body|replace_content"
+    "|insert_after_symbol|insert_before_symbol"
+    "|rename_symbol|safe_delete_symbol)"
+)
+FILE_WRITE_MATCHER = f"^(?:{_FILE_WRITE_TOOLS})$"
+
+# Built-in writers only. Hooks that resolve the edited file from the payload
+# (`file_path` / `notebook_path`) can act only on tools whose field name we
+# know. MCP editors name that field differently per server, so matching them
+# here would add coverage on paper and a silent no-op in practice.
+BUILTIN_FILE_WRITE_MATCHER = "^(?:Write|Edit|MultiEdit|NotebookEdit)$"
+
+# Tools that execute shell commands. PowerShell is the primary shell tool
+# on a Windows host: under the old `Bash` matcher a push through it passed
+# the push gate without a ticket, while the same push through Bash was
+# blocked (observed directly in session #33). All three carry the command
+# in `tool_input.command`, so the hooks parse them unchanged.
+_SHELL_TOOLS = "Bash|PowerShell|mcp__windows-mcp__PowerShell"
+SHELL_MATCHER = f"^(?:{_SHELL_TOOLS})$"
+
+# Work-counting matcher for metrics: shell + file writes, no read tools.
+WORK_TOOLS_MATCHER = f"^(?:{_FILE_WRITE_TOOLS}|{_SHELL_TOOLS})$"
+
+_READ_TOOLS = "Read|Grep|Glob|WebFetch|WebSearch"
+
+# Everything that counts as activity for the SENAR 9.2 active-time gate.
+ACTIVITY_MATCHER = f"^(?:{_FILE_WRITE_TOOLS}|{_SHELL_TOOLS}|{_READ_TOOLS})$"
+
 
 def build_hooks_dict(hook_cmd: Callable[..., str]) -> dict[str, Any]:
     """Build the `hooks` block of .claude/settings.json.
@@ -25,7 +74,7 @@ def build_hooks_dict(hook_cmd: Callable[..., str]) -> dict[str, Any]:
     return {
         "PreToolUse": [
             {
-                "matcher": "Write|Edit",
+                "matcher": FILE_WRITE_MATCHER,
                 "hooks": [
                     {
                         "type": "command",
@@ -35,7 +84,7 @@ def build_hooks_dict(hook_cmd: Callable[..., str]) -> dict[str, Any]:
                 ],
             },
             {
-                "matcher": "Write|Edit|MultiEdit",
+                "matcher": FILE_WRITE_MATCHER,
                 "hooks": [
                     {
                         "type": "command",
@@ -48,7 +97,7 @@ def build_hooks_dict(hook_cmd: Callable[..., str]) -> dict[str, Any]:
                 # SENAR Rule 10.12 (r14-senar-context-hygiene):
                 # Warn (or block under TAUSIK_SECRET_SCAN_STRICT=1) when
                 # the agent is about to write a likely secret to disk.
-                "matcher": "Write|Edit|MultiEdit",
+                "matcher": FILE_WRITE_MATCHER,
                 "hooks": [
                     {
                         "type": "command",
@@ -58,7 +107,7 @@ def build_hooks_dict(hook_cmd: Callable[..., str]) -> dict[str, Any]:
                 ],
             },
             {
-                "matcher": "Bash",
+                "matcher": SHELL_MATCHER,
                 "hooks": [
                     {
                         "type": "command",
@@ -78,8 +127,17 @@ def build_hooks_dict(hook_cmd: Callable[..., str]) -> dict[str, Any]:
                 ],
             },
             {
-                "matcher": "Bash",
-                "if": "Bash(git push *)",
+                # No `if` filter here. It used to read
+                # `"if": "Bash(git push *)"` at THIS level, where Claude Code
+                # never looks — the bundle reads `if` off the individual hook
+                # object (`p = (k) => k.if ?? ""` applied to `k.hook`), so the
+                # line was decorative and the gate has always run on every
+                # shell call. Moving it into the hook object would be worse
+                # than deleting it: the rule is bound to the Bash tool, so it
+                # would re-open the PowerShell bypass this matcher just
+                # closed. Selecting pushes is git_push_gate's own
+                # _GIT_PUSH_RE, which works for any tool carrying `command`.
+                "matcher": SHELL_MATCHER,
                 "hooks": [
                     {
                         "type": "command",
@@ -91,7 +149,7 @@ def build_hooks_dict(hook_cmd: Callable[..., str]) -> dict[str, Any]:
         ],
         "PostToolUse": [
             {
-                "matcher": "Write|Edit",
+                "matcher": BUILTIN_FILE_WRITE_MATCHER,
                 "hooks": [
                     {
                         "type": "command",
@@ -101,7 +159,7 @@ def build_hooks_dict(hook_cmd: Callable[..., str]) -> dict[str, Any]:
                 ],
             },
             {
-                "matcher": "Write|Edit|MultiEdit",
+                "matcher": BUILTIN_FILE_WRITE_MATCHER,
                 "hooks": [
                     {
                         "type": "command",
@@ -114,7 +172,13 @@ def build_hooks_dict(hook_cmd: Callable[..., str]) -> dict[str, Any]:
                 # v14b-task-done-rename-drop-v2: single tausik_task_done MCP tool.
                 # Was a `tausik_task_done|tausik_task_done_v2` alternation pre-1.4
                 # when both names existed; rename consolidated them.
-                "matcher": "mcp__tausik-project__tausik_task_done",
+                #
+                # The shell tools are here because a task closes just as well
+                # through `tausik task done <slug>` on the CLI, which is what
+                # is_task_done_invocation() detects. Without them QG-2 was
+                # enforced only on the MCP path — the same single-entry-point
+                # assumption that let PowerShell around the push gate.
+                "matcher": f"^(?:mcp__tausik-project__tausik_task_done|{_SHELL_TOOLS})$",
                 "hooks": [
                     {
                         "type": "command",
@@ -134,10 +198,10 @@ def build_hooks_dict(hook_cmd: Callable[..., str]) -> dict[str, Any]:
                 ],
             },
             {
-                # HIGH-5 review fix: only Write/Edit/MultiEdit/Bash count
+                # HIGH-5 review fix: only writes and shell calls count
                 # toward call_actual. Read/Grep/Glob are research, not work
                 # — including them inflates the calibration drift metric.
-                "matcher": "Write|Edit|MultiEdit|Bash",
+                "matcher": WORK_TOOLS_MATCHER,
                 "hooks": [
                     {
                         "type": "command",
@@ -167,7 +231,7 @@ def build_hooks_dict(hook_cmd: Callable[..., str]) -> dict[str, Any]:
                 # actually has data to sum. Without it the 180-min SENAR
                 # Rule 9.2 active-time gate never trips on read-heavy
                 # work. Wide matcher (covers Read/Grep/Glob too).
-                "matcher": "Write|Edit|MultiEdit|Bash|Read|Grep|Glob|WebFetch|WebSearch",
+                "matcher": ACTIVITY_MATCHER,
                 "hooks": [
                     {
                         "type": "command",
@@ -183,7 +247,7 @@ def build_hooks_dict(hook_cmd: Callable[..., str]) -> dict[str, Any]:
                 # .tausik/config.json::tool_output_truncation_threshold).
                 # Does NOT modify tool output — just emits stderr so the
                 # agent reads it next turn and adjusts strategy.
-                "matcher": "Read|Grep|Bash|Glob",
+                "matcher": f"^(?:Read|Grep|Glob|{_SHELL_TOOLS})$",
                 "hooks": [
                     {
                         "type": "command",
