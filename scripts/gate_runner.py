@@ -47,7 +47,11 @@ from gate_test_resolver import resolve_test_files_for_relevant  # noqa: F401, E4
 # v14b-filesize-debt-paydown: run_command_gate + _SCOPED_SKIP_SENTINEL extracted
 # to gate_command_runner.py (filesize compliance). Re-exported here so existing
 # callers (e.g. tests/test_gates.py) continue importing them from gate_runner.
-from gate_command_runner import _SCOPED_SKIP_SENTINEL, run_command_gate  # noqa: F401, E402
+from gate_command_runner import (  # noqa: F401, E402
+    _NOTHING_TO_CHECK_SENTINEL,
+    _SCOPED_SKIP_SENTINEL,
+    run_command_gate,
+)
 
 
 def run_gates(
@@ -138,16 +142,23 @@ def run_gates(
         # Scoped-skip sentinel from run_command_gate: either relevant_files
         # were provided but no test files mapped, OR no relevant_files at
         # all (full-suite fallback removed in v1.3 — burns MCP 10s budget).
-        if output == _SCOPED_SKIP_SENTINEL:
-            skip_reason = (
-                "No test file maps to relevant_files via "
-                "tests/test_<basename>.py heuristic; gate skipped (scoped run)."
-                if files
-                else (
-                    "No relevant_files passed; gate skipped. Pass relevant_files "
-                    "for actual verification (e.g. --relevant-files src/foo.py)."
+        if output in (_SCOPED_SKIP_SENTINEL, _NOTHING_TO_CHECK_SENTINEL):
+            if output == _NOTHING_TO_CHECK_SENTINEL:
+                skip_reason = (
+                    "The checker's own config resolved to no source files in this "
+                    "content (e.g. a commit touching only excluded paths); gate "
+                    "skipped — nothing was checked, so there is nothing to block on."
                 )
-            )
+            else:
+                skip_reason = (
+                    "No test file maps to relevant_files via "
+                    "tests/test_<basename>.py heuristic; gate skipped (scoped run)."
+                    if files
+                    else (
+                        "No relevant_files passed; gate skipped. Pass relevant_files "
+                        "for actual verification (e.g. --relevant-files src/foo.py)."
+                    )
+                )
             results.append(
                 {
                     "name": name,

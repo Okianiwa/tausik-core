@@ -22,6 +22,19 @@ from gate_test_resolver import resolve_test_files_for_relevant
 
 _SCOPED_SKIP_SENTINEL = "__TAUSIK_SCOPED_SKIP__"
 
+# A checker invoked without {files} resolves its own scope from config (mypy:
+# files=["scripts"], exclude=["scripts/hooks/"]). On the commit trigger it judges a
+# temp tree holding ONLY staged content, so a commit touching just scripts/hooks/
+# leaves that config resolving to nothing and mypy exits non-zero with a usage
+# error - a block on a commit it never type-checked. Empty input is not a failure:
+# nothing to check is a skip. Real type errors carry a different message and still
+# block. Kept separate from the scoped sentinel so the reason names the true cause.
+_NOTHING_TO_CHECK_SENTINEL = "__TAUSIK_NOTHING_TO_CHECK__"
+_NOTHING_TO_CHECK_MARKERS = (
+    "there are no .py[i] files in directory",
+    "there are no .py[i] files in package",
+)
+
 
 def run_command_gate(gate: dict, files: list[str]) -> tuple[bool, str]:
     """Run a command-based gate. Substitutes {files} / {test_files_for_files}.
@@ -100,6 +113,9 @@ def run_command_gate(gate: dict, files: list[str]) -> tuple[bool, str]:
         output = (result.stdout + result.stderr).strip()
         if result.returncode == 0:
             return True, output or "Passed."
+        low = output.lower()
+        if any(m in low for m in _NOTHING_TO_CHECK_MARKERS):
+            return True, _NOTHING_TO_CHECK_SENTINEL
         return False, output or f"Failed with exit code {result.returncode}."
     except subprocess.TimeoutExpired:
         return False, f"Gate timed out ({timeout}s)."

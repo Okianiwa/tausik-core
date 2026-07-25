@@ -18,6 +18,7 @@ from project_config import (  # noqa: E402
     load_gates,
 )
 from gate_runner import (  # noqa: E402
+    _NOTHING_TO_CHECK_SENTINEL,
     check_file_conflicts,
     count_lines,
     format_results,
@@ -248,6 +249,43 @@ class TestGateRunner:
         gate = {"command": 'python -c "import sys; print(sys.argv)" {files}'}
         passed, output = run_command_gate(gate, [str(f)])
         assert passed is True
+
+    def _fake_checker(self, tmp_path, message, exit_code):
+        """A stand-in for a config-driven checker (mypy) with a fixed verdict."""
+        script = tmp_path / "fake_checker.py"
+        script.write_text(
+            "import sys\n"
+            f"sys.stderr.write({message!r})\n"
+            f"sys.exit({exit_code})\n",
+            encoding="utf-8",
+        )
+        # as_posix: the runner shlex-splits with posix=True, which eats backslashes.
+        return {"command": f"python {script.as_posix()}"}
+
+    def test_command_gate_skips_when_the_checker_has_nothing_to_check(self, tmp_path):
+        """Empty input is not a failure.
+
+        mypy reads files=/exclude= from pyproject, so on the commit trigger — which
+        judges a temp tree of ONLY staged content — a commit touching just
+        scripts/hooks/ (excluded) leaves it with no sources and a usage error.
+        Blocking there rejects a commit nothing was checked in.
+        """
+        gate = self._fake_checker(
+            tmp_path, "There are no .py[i] files in directory 'scripts'\n", 2
+        )
+        passed, output = run_command_gate(gate, [])
+        assert passed is True
+        assert output == _NOTHING_TO_CHECK_SENTINEL
+
+    def test_command_gate_still_blocks_on_a_real_type_error(self, tmp_path):
+        """The negative half: the skip must not swallow honest failures."""
+        gate = self._fake_checker(
+            tmp_path, 'scripts/x.py:3: error: Incompatible return value type\n', 1
+        )
+        passed, output = run_command_gate(gate, [])
+        assert passed is False
+        assert output != _NOTHING_TO_CHECK_SENTINEL
+        assert "Incompatible return value type" in output
 
     def test_pytest_gate_full_lane_env_var_injects_override(self, tmp_path, monkeypatch):
         """v14b-pytest-fast-lane: TAUSIK_VERIFY_FULL=1 makes pytest gate run the
