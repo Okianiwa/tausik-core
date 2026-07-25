@@ -234,12 +234,25 @@ class TestHookFailOpenEmits:
         return project_dir, db, str(target)
 
     def test_task_gate_fail_open_emits(self, tmp_path):
+        """task_gate is fail-SECURE by default (fork decision #58), so the
+        fail-open path — and the event that counts it — exists only under the
+        explicit opt-out. The event still matters there: an opt-out that drops
+        the gate must stay countable rather than invisible."""
         project_dir, db, target = self._setup(tmp_path)
-        result = _run_hook("task_gate.py", project_dir, target)
+        result = _run_hook(
+            "task_gate.py", project_dir, target, extra_env={"TAUSIK_HOOK_FAIL_OPEN": "1"}
+        )
         assert result.returncode == 0, result.stderr
         rows = _supervision_rows(db)
         assert [(r[0], r[1]) for r in rows] == [("task_gate", "fail_open_db_error")]
         assert rows[0][2]  # details carries the sqlite error text
+
+    def test_task_gate_blocks_on_db_error_by_default(self, tmp_path):
+        """NEGATIVE: without the opt-out a DB error must not become an allow —
+        that is the whole point of the fork's fail-secure default."""
+        project_dir, _db, target = self._setup(tmp_path)
+        result = _run_hook("task_gate.py", project_dir, target)
+        assert result.returncode == 2, result.stderr
 
     def test_scope_write_gate_fail_open_emits(self, tmp_path):
         project_dir, db, target = self._setup(tmp_path)

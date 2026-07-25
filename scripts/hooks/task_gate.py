@@ -8,12 +8,15 @@ shape. Two reasons:
      Windows; pure SQLite query is sub-millisecond. Editor-heavy sessions
      used to feel sluggish.
   2. **Reliability.** A subprocess that fails (PowerShell quirk, locked
-     venv, transient OSError) used to silently let edits through —
-     fail-open. The new path keeps that fail-open as DEFAULT (so `tausik
-     doctor` issues never brick a project) but adds an explicit
-     `TAUSIK_HOOK_FAIL_SECURE=1` opt-in: under that flag, any DB error
-     blocks the write instead of allowing it. Recommended for shared/CI
-     contexts where silent bypass is unacceptable.
+     venv, transient OSError) used to silently let edits through.
+
+     Since decision #58 the default is fail-SECURE: a DB error blocks the
+     write. The gate only reaches that branch when `.tausik/tausik.db`
+     exists, so the error means real breakage rather than an uninitialised
+     project, and a guard that silently allows what it is meant to gate is
+     worse than a loud stop. A locked DB — the one common, self-resolving
+     failure — is retried before blocking. `TAUSIK_HOOK_FAIL_OPEN=1`
+     restores the old permissive behaviour.
 
 Exit codes: 0 = allow, 2 = block.
 
@@ -33,7 +36,7 @@ import sqlite3
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _common import cli_invocation, is_tausik_project  # noqa: E402
+from _common import cli_invocation, edited_file_paths, is_tausik_project  # noqa: E402
 
 
 def target_is_outside_project(raw_stdin: str, project_dir: str) -> bool:
@@ -62,31 +65,81 @@ def target_is_outside_project(raw_stdin: str, project_dir: str) -> bool:
         tool_input = payload.get("tool_input")
         if not isinstance(tool_input, dict):
             return False
-        path = tool_input.get("file_path") or tool_input.get("notebook_path")
-        if not isinstance(path, str) or not path.strip():
+        # Every path field a writer can carry, not just the two built-in ones:
+        # a serena edit names `relative_path`, a FileSystem move `destination`.
+        # Reading only `file_path` here made those calls "not proven outside",
+        # which gates another repository's files — the defect this guards.
+        paths = edited_file_paths(tool_input)
+        if not paths:
             return False
         # Relative paths belong to the project by definition of the cwd the hook
-        # runs in, so they resolve against project_dir and stay gated.
-        target = os.path.realpath(os.path.join(project_dir, path))
+        # runs in, so they resolve against project_dir and stay gated. ALL of
+        # them must be outside: one target inside keeps the gate on.
         root = os.path.realpath(project_dir)
-        return os.path.commonpath([target, root]) != root
+        return all(
+            os.path.commonpath([os.path.realpath(os.path.join(project_dir, p)), root]) != root
+            for p in paths
+        )
     except Exception:  # noqa: BLE001 — any failure means "not proven outside" => keep gating
         return False
+
+
+# Budget for the two SELECT attempts, in seconds. Both numbers are small on
+# purpose: SQLite's busy handler OVERSHOOTS the nominal timeout by ~1.5x
+# (measured on this host: 1.5 -> 2.48s, 2.0 -> 3.20s, 5.0 -> 7.42s), and the
+# hook itself is killed at the `timeout` set in bootstrap_hooks.py. A killed
+# hook returns aborted, and the harness only blocks on exit code 2 — so
+# overrunning the budget is a SILENT ALLOW, the exact opposite of the
+# fail-secure guarantee. An earlier 2.0 + 5.0 pair took 10.65s against a
+# 10s budget and lost the block in 3 runs out of 3.
+# tests/test_task_gate_hook.py::test_db_timeout_budget_fits_hook_timeout
+# keeps this under the configured timeout.
+_DB_TIMEOUTS = (1.0, 2.0)
+_SQLITE_OVERSHOOT = 1.6
+
+
+def _query_active_task(db_path: str, timeout: float) -> bool:
+    conn = sqlite3.connect(db_path, timeout=timeout)
+    try:
+        row = conn.execute("SELECT 1 FROM tasks WHERE status = 'active' LIMIT 1").fetchone()
+        return row is not None
+    finally:
+        conn.close()
 
 
 def _has_active_task(db_path: str) -> bool:
     """Direct SQLite SELECT — no subprocess.
 
     Returns True iff at least one row in `tasks` has status='active'.
-    Raises sqlite3.Error on failure so the caller can apply the
-    fail-secure policy.
+    Retries once before giving up: a concurrent writer holding the lock is
+    the one failure here that is both common and self-resolving, and under
+    the fail-secure default a single unlucky timeout would otherwise block
+    a legitimate edit. Both attempts together must stay inside the hook's
+    own timeout — see _DB_TIMEOUTS.
+
+    Raises sqlite3.Error if the retry fails too, so the caller can apply
+    the fail-secure policy.
     """
-    conn = sqlite3.connect(db_path, timeout=2.0)
+    first, retry = _DB_TIMEOUTS
     try:
-        row = conn.execute("SELECT 1 FROM tasks WHERE status = 'active' LIMIT 1").fetchone()
-        return row is not None
-    finally:
-        conn.close()
+        return _query_active_task(db_path, timeout=first)
+    except sqlite3.OperationalError:
+        return _query_active_task(db_path, timeout=retry)
+
+
+def _is_read_only_call(payload: dict) -> bool:
+    """True for calls that cannot change a file.
+
+    The matcher has to name windows-mcp FileSystem to catch `mode=write`,
+    but that same tool also reads, lists and searches. Blocking those would
+    stop plain research before a task is started — the rule is about
+    changing code, not looking at it.
+    """
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return False
+    mode = tool_input.get("mode")
+    return isinstance(mode, str) and mode in {"read", "list", "search", "info"}
 
 
 def main() -> int:
@@ -107,18 +160,28 @@ def main() -> int:
         )
         return 0
 
-    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
-
-    if not is_tausik_project(project_dir):
-        return 0
-
-    # Read stdin ONCE and unconditionally: it is a pipe, and leaving it unread
-    # can block the caller. An empty read is fine — the helper treats it as
-    # "not proven outside" and the gate stays on.
+    # Read stdin ONCE and unconditionally: it is a pipe, leaving it unread can
+    # block the caller, and a SECOND read returns "" — which this gate reads as
+    # "not proven outside", so every edit in a sibling repository was refused.
+    # Both consumers below are served from this one read.
     try:
         raw_stdin = sys.stdin.read()
     except Exception:  # noqa: BLE001 — unreadable stdin must not weaken the gate
         raw_stdin = ""
+
+    # Unreadable payload is treated as a write: guessing "probably harmless"
+    # in the guard's own parse failure is how gates go quiet.
+    try:
+        payload = json.loads(raw_stdin) if raw_stdin.strip() else {}
+    except (json.JSONDecodeError, ValueError, EOFError):
+        payload = {}
+    if isinstance(payload, dict) and _is_read_only_call(payload):
+        return 0
+
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
+
+    if not is_tausik_project(project_dir):
+        return 0
 
     if target_is_outside_project(raw_stdin, project_dir):
         return 0
@@ -128,32 +191,39 @@ def main() -> int:
         # Bootstrap-but-not-init: nothing to enforce yet.
         return 0
 
-    fail_secure = bool(os.environ.get("TAUSIK_HOOK_FAIL_SECURE"))
+    # Fail-secure is the DEFAULT (decision #58). The DB file exists at this
+    # point, so a failing SELECT means real breakage, not a fresh project —
+    # and a guard that silently allows the action it is supposed to gate is
+    # the exact defect class this hook exists to prevent. Opt out with
+    # TAUSIK_HOOK_FAIL_OPEN=1 when a broken DB must not stop editing.
+    fail_open = os.environ.get("TAUSIK_HOOK_FAIL_OPEN") == "1"
 
     try:
         active = _has_active_task(db_path)
     except sqlite3.Error as e:
-        if fail_secure:
-            print(
-                f"BLOCKED: TAUSIK_HOOK_FAIL_SECURE=1 set, but task gate could "
-                f"not query .tausik/tausik.db: {e}. Fix the DB or unset the "
-                "flag to allow edits.",
-                file=sys.stderr,
-            )
-            return 2
-        # Default: fail-open so a transient DB issue never bricks editing — but
-        # a silently-dropped gate must stay countable, not invisible.
-        emit_supervision_degradation(project_dir, "db_error", "task_gate", str(e))
-        return 0
+        # Fail-secure by default (fork): a DB error blocks the edit instead of
+        # quietly allowing it. Opting out stays possible, and an opt-out that
+        # drops the gate must stay countable — that counter is upstream's.
+        if fail_open:
+            emit_supervision_degradation(project_dir, "db_error", "task_gate", str(e))
+            return 0
+        print(
+            f"BLOCKED: task gate could not query .tausik/tausik.db: {e}. "
+            "Run `tausik doctor`. To edit anyway, set TAUSIK_HOOK_FAIL_OPEN=1 "
+            "— that disables the no-code-without-a-task rule.",
+            file=sys.stderr,
+        )
+        return 2
     except Exception as e:  # defensive — never bring down the host.  # noqa: BLE001 — best-effort: a hook must never break the tool call it guards
-        if fail_secure:
-            print(
-                f"BLOCKED: TAUSIK_HOOK_FAIL_SECURE=1 set, task gate crashed: {e}",
-                file=sys.stderr,
-            )
-            return 2
-        emit_supervision_degradation(project_dir, "db_error", "task_gate", str(e))
-        return 0
+        if fail_open:
+            emit_supervision_degradation(project_dir, "db_error", "task_gate", str(e))
+            return 0
+        print(
+            f"BLOCKED: task gate crashed: {e}. To edit anyway, set "
+            "TAUSIK_HOOK_FAIL_OPEN=1 — that disables the gate.",
+            file=sys.stderr,
+        )
+        return 2
 
     if active:
         return 0

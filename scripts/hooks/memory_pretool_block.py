@@ -46,6 +46,8 @@ sys.path.insert(0, _HOOKS_DIR)
 sys.path.insert(1, os.path.dirname(_HOOKS_DIR))  # scripts/ — for memory_sinks
 
 from _common import (  # noqa: E402
+    FILE_WRITE_TOOL_NAMES,
+    edited_file_paths,
     is_tausik_project,
     last_user_prompt_text,
     marker_present_anchored,
@@ -59,7 +61,9 @@ from memory_sinks import (  # noqa: E402
 )
 
 _BYPASS_MARKER = "confirm: cross-project"
-_PATH_TOOLS = ("Write", "Edit", "MultiEdit")
+# Every tool that writes a file, not the three built-ins: serena's symbol
+# editors and the MCP writers reach ~/.claude/**/memory/ just as well.
+_PATH_TOOLS = FILE_WRITE_TOOL_NAMES
 
 
 def _read_stdin_json() -> dict:
@@ -134,8 +138,9 @@ def _targets(event: dict, project_dir: str) -> list[str]:
     if not isinstance(tool_input, dict):
         return []
     if tool in _PATH_TOOLS:
-        fp = tool_input.get("file_path")
-        return [fp] if isinstance(fp, str) and fp else []
+        # Every path field a writer can carry (file_path / notebook_path /
+        # path / relative_path / destination), not just the first one.
+        return list(edited_file_paths(tool_input))
     # Which shells carry a command is `shell_channel`'s answer. The literal
     # `!= "Bash"` that stood here covered exactly one of the two shell tools the
     # agent is handed on win32, so `Set-Content ~/.claude/.../memory/x.md` — the

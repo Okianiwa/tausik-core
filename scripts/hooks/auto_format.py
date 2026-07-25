@@ -11,6 +11,22 @@ import os
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+try:
+    from _common import edited_file_path  # noqa: E402
+except ImportError:  # pragma: no cover - formatting is best-effort
+
+    def edited_file_path(tool_input: dict) -> str:
+        if not isinstance(tool_input, dict):
+            return ""
+        for key in ("file_path", "notebook_path", "path"):
+            value = tool_input.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return ""
+
+
 # Extension → formatter command
 FORMATTERS = {
     ".py": ["ruff", "format", "--quiet"],
@@ -36,7 +52,7 @@ def main() -> int:
     except (json.JSONDecodeError, EOFError):
         return 0
 
-    file_path = data.get("tool_input", {}).get("file_path", "")
+    file_path = edited_file_path(data.get("tool_input", {}))
     if not file_path or not os.path.isfile(file_path):
         return 0
 

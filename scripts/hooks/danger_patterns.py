@@ -75,8 +75,12 @@ _CMD_START = r"(?:^|[\s;&|()`])"
 # path component must end with `/` or `\` so a bare token like `gitfoo`
 # never matches.
 _OPT_PATH = r"(?:[/\w.\\-]*[/\\])?"
-# Optional `git -c key=val` flags between `git` and the subcommand.
-_OPT_GIT_C = r"(?:\s+-c\s+\S+)*"
+# Global git flags between `git` and the subcommand. Mirrors
+# git_push_gate._GIT_PUSH_RE — both used to accept only `-c`, so
+# `git.exe push --force` and `git --no-pager reset --hard` slipped through
+# BOTH layers on the same input, which makes the defense-in-depth story
+# between them worthless.
+_OPT_GIT_C = r"(?:\s+(?:-[cC]\s+\S+|--?[\w-]+(?:=\S+)?))*"
 
 
 def _git_subcmd_re(subcmd: str, danger_arg_re: str) -> re.Pattern:
@@ -100,7 +104,7 @@ def _git_subcmd_re(subcmd: str, danger_arg_re: str) -> re.Pattern:
     # dangerous-looking argument belonging to the NEXT command could complete a
     # match started by this one (`git clean -n ; tar -fd x`).
     return re.compile(
-        rf"{_CMD_START}{_OPT_PATH}git{_OPT_GIT_C}\s+(?:{subcmd})\b[^\n;&|]*?(?:{danger_arg_re})",
+        rf"{_CMD_START}{_OPT_PATH}git(?:\.exe)?{_OPT_GIT_C}\s+(?:{subcmd})\b[^\n;&|]*?(?:{danger_arg_re})",
         re.IGNORECASE,
     )
 

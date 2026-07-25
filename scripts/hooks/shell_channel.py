@@ -34,6 +34,10 @@ import pwsh_write_parse  # noqa: E402
 _DIALECTS = {
     "Bash": bash_write_parse,
     "PowerShell": pwsh_write_parse,
+    # The windows-mcp server hands the agent a third shell. It speaks the same
+    # dialect as the built-in PowerShell tool, but arrives under its own
+    # tool_name — and a guard bound to the other two never sees it.
+    "mcp__windows-mcp__PowerShell": pwsh_write_parse,
 }
 
 #: Tool name -> the scanner that separates that dialect's COMMANDS from the
@@ -43,6 +47,7 @@ _DIALECTS = {
 _SCANNERS = {
     "Bash": bash_cmd_scan.scan_target,
     "PowerShell": pwsh_cmd_norm.scan_target,
+    "mcp__windows-mcp__PowerShell": pwsh_cmd_norm.scan_target,
 }
 
 #: Every tool whose input is a shell command line. Hooks registered on these

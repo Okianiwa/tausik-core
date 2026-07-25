@@ -30,6 +30,38 @@ def cli_invocation() -> str:
     except Exception:  # noqa: BLE001 — a hint must never break the gate it explains
         return ".tausik/tausik"
 
+# Tool names a guard has to know about, kept here rather than re-listed in
+# every hook: the matchers in bootstrap_hooks.py and these sets are two
+# independent filters, and a call has to clear BOTH. When they drift, the
+# hook still runs and still prints [PASS] — it just returns 0 without
+# looking at anything, which is indistinguishable from a real pass.
+# tests/test_hook_tool_coverage.py asserts the two stay in sync.
+#
+# MultiEdit has no built-in tool in Claude Code 2.1.215; it is listed as
+# future-proofing. NotebookEdit and the MCP editors are live write paths.
+FILE_WRITE_TOOL_NAMES = frozenset(
+    {
+        "Write",
+        "Edit",
+        "MultiEdit",
+        "NotebookEdit",
+        "mcp__windows-mcp__FileSystem",
+        "mcp__serena__replace_symbol_body",
+        "mcp__serena__replace_content",
+        "mcp__serena__insert_after_symbol",
+        "mcp__serena__insert_before_symbol",
+        "mcp__serena__rename_symbol",
+        "mcp__serena__safe_delete_symbol",
+    }
+)
+
+# Built-in writers carry the target path in a field we know how to read.
+BUILTIN_FILE_WRITE_TOOL_NAMES = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
+
+# Shell tools. PowerShell is the primary shell on a Windows host, and a
+# guard bound to Bash alone is bypassed by simply using it — that is how a
+# push reached the remote without a ticket in session #33.
+SHELL_TOOL_NAMES = frozenset({"Bash", "PowerShell", "mcp__windows-mcp__PowerShell"})
 
 _TASK_DONE_TOOL_NAMES = (
     # v14b-task-done-rename-drop-v2: single MCP tool name. The v2 variant was
@@ -231,6 +263,45 @@ def has_active_task(project_dir: str, timeout: int = 4) -> bool:
     return False
 
 
+# Every field a write tool may carry its target in. Verified against the live
+# tool schemas, not guessed: `file_path` (Write/Edit), `notebook_path`
+# (NotebookEdit), `path` + `destination` (windows-mcp FileSystem — move/copy
+# write to the DESTINATION, so checking only `path` inspects the source and
+# clears the write), `relative_path` (every serena editor).
+_PATH_FIELDS = ("file_path", "notebook_path", "path", "relative_path", "destination")
+
+
+def edited_file_paths(tool_input: dict) -> list[str]:
+    """Return every path this call could write to, absolute, in field order.
+
+    Returns a list rather than one path because FileSystem move/copy names
+    two, and the destination is the one that matters. Relative paths (serena
+    speaks them) are resolved against CLAUDE_PROJECT_DIR — left relative they
+    would never compare equal to a guarded absolute location, so the guard
+    would match, find a path, and still wave the write through.
+    """
+    if not isinstance(tool_input, dict):
+        return []
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    paths: list[str] = []
+    for key in _PATH_FIELDS:
+        value = tool_input.get(key)
+        if not isinstance(value, str) or not value:
+            continue
+        expanded = os.path.expanduser(value)
+        joined = expanded if os.path.isabs(expanded) else os.path.join(project_dir, expanded)
+        # normpath collapses `..` — without it a relative path can climb out
+        # of the project into a guarded directory and compare unequal to it.
+        paths.append(os.path.normpath(joined))
+    return paths
+
+
+def edited_file_path(tool_input: dict) -> str:
+    """First path from :func:`edited_file_paths`, '' when there is none."""
+    paths = edited_file_paths(tool_input)
+    return paths[0] if paths else ""
+
+
 def extract_task_done_slug_from_bash(command: str) -> str:
     """Return the task slug if the command is a real `tausik task done <slug>` call, else ''."""
     if not isinstance(command, str):
@@ -243,7 +314,7 @@ def is_task_done_invocation(tool_name: str, tool_input: dict) -> bool:
     """True if this tool call is actually closing a task (MCP or Bash CLI)."""
     if tool_name in _TASK_DONE_TOOL_NAMES:
         return True
-    if tool_name != "Bash":
+    if tool_name not in SHELL_TOOL_NAMES:
         return False
     return bool(extract_task_done_slug_from_bash(tool_input.get("command") or ""))
 

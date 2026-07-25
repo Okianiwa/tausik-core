@@ -12,7 +12,10 @@ Deliberately conservative adoption semantics:
   - target outside the project root -> allow (auto-memory and other
     out-of-tree paths are governed by their own hooks);
   - pre-v30 DB (no scope_paths column) or any DB error -> fail-open,
-    unless TAUSIK_HOOK_FAIL_SECURE=1 (same policy as task_gate.py).
+    unless TAUSIK_HOOK_FAIL_SECURE=1. NOT the same policy as task_gate.py:
+    that gate blocks on a DB error by default (fork decision #58), because
+    "no active task" is a verdict about the whole write, while this gate's
+    verdict is about a path list a task may legitimately not have declared.
 
 Exit codes: 0 = allow, 2 = block. Skipped via TAUSIK_SKIP_HOOKS=1.
 """

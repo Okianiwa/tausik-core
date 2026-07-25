@@ -139,7 +139,15 @@ def test_shell_matcher_covers_every_dialect_the_parser_knows():
     import shell_channel
     from bootstrap_hooks import SHELL_MATCHER
 
-    assert SHELL_MATCHER == "|".join(shell_channel.SHELL_TOOLS)
+    # Compared by COVERAGE, not by spelling: the fork anchors its matchers
+    # (`^(?:…)$`) because an unanchored one is compared by exact equality on
+    # some hosts and as a substring search on others. What must hold is that
+    # every dialect the parser knows reaches the gate.
+    from test_hook_tool_coverage import matcher_matches
+
+    for tool in shell_channel.SHELL_TOOLS:
+        assert matcher_matches(tool, SHELL_MATCHER), (tool, SHELL_MATCHER)
+    assert not matcher_matches("Write", SHELL_MATCHER), SHELL_MATCHER
 
 
 def test_every_shell_gate_is_registered_for_every_shell_tool(claude_settings, qwen_settings):
@@ -153,6 +161,7 @@ def test_every_shell_gate_is_registered_for_every_shell_tool(claude_settings, qw
     """
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "hooks"))
     import shell_channel
+    from test_hook_tool_coverage import matcher_matches
 
     command_reading_gates = {
         "bash_firewall.py",
@@ -164,8 +173,11 @@ def test_every_shell_gate_is_registered_for_every_shell_tool(claude_settings, qw
         for entry in settings.get("hooks", {}).get("PreToolUse", []):
             scripts = {os.path.basename(h["command"].split()[-1]) for h in entry["hooks"]}
             for gate in scripts & command_reading_gates:
-                tools = set(entry["matcher"].split("|"))
-                missing = set(shell_channel.SHELL_TOOLS) - tools
+                missing = {
+                    t
+                    for t in shell_channel.SHELL_TOOLS
+                    if not matcher_matches(t, entry["matcher"])
+                }
                 assert not missing, (
                     f"{label}: {gate} reads a shell command but is not registered "
                     f"for {sorted(missing)} — that channel reaches no gate. "

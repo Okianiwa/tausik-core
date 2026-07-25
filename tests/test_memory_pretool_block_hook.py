@@ -602,6 +602,7 @@ class TestSettingsGeneration:
     def test_claude_settings_registers_hook(self, tmp_path):
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bootstrap"))
         from bootstrap_generate import generate_settings_claude
+        from bootstrap_hooks import WORK_TOOLS_MATCHER
 
         target = tmp_path / ".claude"
         target.mkdir()
@@ -613,19 +614,12 @@ class TestSettingsGeneration:
         for entry in hooks["PreToolUse"]:
             if not any("memory_pretool_block.py" in h["command"] for h in entry["hooks"]):
                 continue
-            # The shell tools are on the matcher since memory-route-gate: a
-            # heredoc or a Set-Content writes exactly what the Write path
-            # refuses. The expected value is DERIVED from the parser's own
-            # dialect list rather than spelled out here — this assertion used to
-            # carry the literal "Write|Edit|MultiEdit|Bash", and that literal is
-            # precisely the shape that let a second shell tool go ungated: the
-            # test kept passing while the channel it named stopped being the
-            # only one.
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "hooks"))
-            import shell_channel
-
-            expected = "Write|Edit|MultiEdit|" + "|".join(shell_channel.SHELL_TOOLS)
-            assert entry["matcher"] == expected, entry
+            # Both channels, and neither spelled out as a literal: the shell
+            # tools because a heredoc or Set-Content writes what the Write path
+            # refuses, the editors because NotebookEdit and the MCP editors slip
+            # past a Write|Edit|MultiEdit literal. Coverage itself is asserted in
+            # tests/test_hook_tool_coverage.py.
+            assert entry["matcher"] == WORK_TOOLS_MATCHER, entry
             matched = True
         assert matched, "memory_pretool_block.py not registered in Claude PreToolUse"
 
@@ -643,18 +637,12 @@ class TestSettingsGeneration:
         for entry in hooks["PreToolUse"]:
             if not any("memory_pretool_block.py" in h["command"] for h in entry["hooks"]):
                 continue
-            # The shell tools are on the matcher since memory-route-gate: a
-            # heredoc or a Set-Content writes exactly what the Write path
-            # refuses. The expected value is DERIVED from the parser's own
-            # dialect list rather than spelled out here — this assertion used to
-            # carry the literal "Write|Edit|MultiEdit|Bash", and that literal is
-            # precisely the shape that let a second shell tool go ungated: the
-            # test kept passing while the channel it named stopped being the
-            # only one.
+            # Qwen keeps a plain alternation (see bootstrap_qwen.py), derived
+            # from the same two sets rather than spelled out.
             sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "hooks"))
             import shell_channel
 
-            expected = "Write|Edit|MultiEdit|" + "|".join(shell_channel.SHELL_TOOLS)
+            expected = "Write|Edit|MultiEdit|NotebookEdit|" + "|".join(shell_channel.SHELL_TOOLS)
             assert entry["matcher"] == expected, entry
             matched = True
         assert matched, "memory_pretool_block.py not registered in Qwen PreToolUse"

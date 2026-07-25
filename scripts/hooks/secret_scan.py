@@ -55,6 +55,32 @@ if _HOOKS_DIR not in sys.path:
 
 from shell_channel import is_shell_tool  # noqa: E402
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+try:
+    from _common import FILE_WRITE_TOOL_NAMES  # noqa: E402
+except ImportError as _e:  # pragma: no cover - exercised via subprocess tests
+    # A module-scope ImportError exits 1, and the harness treats anything
+    # other than 2 as allow — the scan would vanish without a word. Keep a
+    # local copy so a stale _common.py degrades loudly instead of silently.
+    # tests/test_hook_tool_coverage.py pins this against the real set.
+    print(f"secret_scan: falling back, cannot import _common ({_e})", file=sys.stderr)
+    FILE_WRITE_TOOL_NAMES = frozenset(
+        {
+            "Write",
+            "Edit",
+            "MultiEdit",
+            "NotebookEdit",
+            "mcp__windows-mcp__FileSystem",
+            "mcp__serena__replace_symbol_body",
+            "mcp__serena__replace_content",
+            "mcp__serena__insert_after_symbol",
+            "mcp__serena__insert_before_symbol",
+            "mcp__serena__rename_symbol",
+            "mcp__serena__safe_delete_symbol",
+        }
+    )
+
 _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("aws_access_key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("aws_secret_key", re.compile(r"\baws_secret(?:_access)?_key\b\s*[:=]\s*[A-Za-z0-9/+]{40}")),
@@ -124,12 +150,12 @@ def main() -> int:
     if not isinstance(payload, dict):
         return 0
     tool_name = payload.get("tool_name") or ""
-    # The write tools carry the content in `content`/`new_string`; the shell
-    # tools carry it in `command`. `_walk` scans every string field of either,
-    # so admitting both here is all it takes. `is_shell_tool` is asked rather
-    # than a literal ("Bash","PowerShell") list so a third shell added to
-    # `shell_channel` is covered without editing this line (convention #289).
-    if tool_name not in ("Write", "Edit", "MultiEdit") and not is_shell_tool(tool_name):
+    # Write tools carry the content in `content`/`new_string`, shell tools
+    # in `command`; `_walk` scans every string field of either. The editor
+    # set is the fork's (serena and the MCP writers edit files too), and
+    # `is_shell_tool` is asked rather than a literal list so a third shell
+    # added to `shell_channel` is covered without editing this line.
+    if tool_name not in FILE_WRITE_TOOL_NAMES and not is_shell_tool(tool_name):
         return 0
     tool_input = payload.get("tool_input") or {}
     hits: list[tuple[str, str]] = []

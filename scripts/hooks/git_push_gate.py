@@ -44,8 +44,16 @@ if _HOOKS_DIR not in sys.path:
 # path — it does not false-positive on a 'git push' mention inside a quoted
 # argument, which the substring regex did (blocking e.g. `tausik memory add
 # "...git push..."`).
+#
+# Even as a fallback it must cover the shapes that used to sail past: `.exe` is
+# explicit because `git.exe push` is idiomatic on Windows, and the option group
+# covers any global git flag, not just `-c` (`git --no-pager push`, `git -C dir
+# push`). Flags are matched before the subcommand only, so `git commit -m ...`
+# cannot reach `push` through this pattern.
 _GIT_PUSH_RE = re.compile(
-    r"(?:^|[\s;&|()`])(?:[/\w.\\-]*[/\\])?git(?:\s+-c\s+\S+)*\s+push\b",
+    r"(?:^|[\s;&|()`])(?:[/\w.\\-]*[/\\])?git(?:\.exe)?"
+    r"(?:\s+(?:-[cC]\s+\S+|--?[\w-]+(?:=\S+)?))*"
+    r"\s+push\b",
     re.IGNORECASE,
 )
 

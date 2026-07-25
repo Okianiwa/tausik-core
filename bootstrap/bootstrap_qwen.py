@@ -19,7 +19,6 @@ from bootstrap_generate import _stdio_mcp_server
 # second shell tool appeared, the Claude generator and this one would have had
 # to be edited in lockstep by whoever remembered. Sharing the constant makes
 # that impossible to get wrong.
-from bootstrap_hooks import SHELL_MATCHER
 
 
 def generate_settings_qwen(
@@ -85,12 +84,27 @@ def generate_settings_qwen(
             [_p(brain_server), "--project", _p(project_dir)],
         )
 
+    # Qwen Code's matcher semantics are undocumented and, unlike Claude
+    # Code's, we have not read its implementation. So these stay plain
+    # alternations rather than the anchored `^(?:...)$` form used in
+    # bootstrap_hooks.py — a bare list works whether the host compares names
+    # exactly or searches them as a regex.
+    #
+    # The MCP names ARE listed. Leaving them out was the same mistake this
+    # change exists to fix: under exact-split matching, omitting
+    # mcp__windows-mcp__PowerShell leaves session #33's push bypass open
+    # here. Adding them is safe under both readings — an extra alternative
+    # when names are compared exactly, an extra substring when searched.
+    # Coverage under Qwen is otherwise untested: the MCP file editors are
+    # still absent, tracked as a follow-up.
+    _write_tools = "Write|Edit|MultiEdit|NotebookEdit"
+    _shell_tools = "Bash|PowerShell|mcp__windows-mcp__PowerShell"
+
     # Hooks — same SENAR enforcement as Claude Code
     hooks = {
         "PreToolUse": [
             {
-                # l26-hook-contract-review parity: MultiEdit/NotebookEdit also write.
-                "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+                "matcher": _write_tools,
                 "hooks": [
                     {
                         "type": "command",
@@ -101,8 +115,7 @@ def generate_settings_qwen(
             },
             {
                 # v15-scope-enforce-write parity with bootstrap_hooks.py
-                # (+ l26-hook-contract-review: NotebookEdit added).
-                "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+                "matcher": _write_tools,
                 "hooks": [
                     {
                         "type": "command",
@@ -112,9 +125,7 @@ def generate_settings_qwen(
                 ],
             },
             {
-                # memory-route-gate: shell parity with bootstrap_hooks.py — a
-                # heredoc or a Set-Content writes what the Write path refuses.
-                "matcher": f"Write|Edit|MultiEdit|{SHELL_MATCHER}",
+                "matcher": f"{_write_tools}|{_shell_tools}",
                 "hooks": [
                     {
                         "type": "command",
@@ -124,10 +135,7 @@ def generate_settings_qwen(
                 ],
             },
             {
-                # secret-scan-covers-no-shell-channel (Decision #178): shell
-                # parity with bootstrap_hooks.py — a heredoc or `Set-Content
-                # -Value 'AKIA...'` carries the secret the Write path warns on.
-                "matcher": f"Write|Edit|MultiEdit|{SHELL_MATCHER}",
+                "matcher": f"{_write_tools}|{_shell_tools}",
                 "hooks": [
                     {
                         "type": "command",
@@ -137,7 +145,7 @@ def generate_settings_qwen(
                 ],
             },
             {
-                "matcher": SHELL_MATCHER,
+                "matcher": _shell_tools,
                 "hooks": [
                     {
                         "type": "command",
@@ -149,7 +157,7 @@ def generate_settings_qwen(
             {
                 # l26-hook-contract-review parity: close the shell-write bypass
                 # of QG-0 + scope-ACL (see bootstrap_hooks.py for the rationale).
-                "matcher": SHELL_MATCHER,
+                "matcher": _shell_tools,
                 "hooks": [
                     {
                         "type": "command",
@@ -162,7 +170,11 @@ def generate_settings_qwen(
                 # `if` dropped for the reason bootstrap_hooks.py records: it was
                 # a second, dialect-specific copy of the decision the hook makes
                 # itself, and it named one shell.
-                "matcher": SHELL_MATCHER,
+                "matcher": _shell_tools,
+                # `if` dropped here as in bootstrap_hooks.py — selecting
+                # pushes is git_push_gate's own regex, which works for any
+                # tool that carries `command`.
+                "matcher": _shell_tools,
                 "hooks": [
                     {
                         "type": "command",
@@ -184,7 +196,7 @@ def generate_settings_qwen(
         ],
         "PostToolUse": [
             {
-                "matcher": "Write|Edit",
+                "matcher": _write_tools,
                 "hooks": [
                     {
                         "type": "command",
@@ -194,7 +206,7 @@ def generate_settings_qwen(
                 ],
             },
             {
-                "matcher": "Write|Edit|MultiEdit",
+                "matcher": _write_tools,
                 "hooks": [
                     {
                         "type": "command",
@@ -207,7 +219,7 @@ def generate_settings_qwen(
                 "matcher": (
                     "mcp__tausik-project__tausik_task_done"
                     "|mcp__tausik-project__tausik_task_done_v2"
-                    f"|{SHELL_MATCHER}"
+                    f"|{_shell_tools}"
                 ),
                 "hooks": [
                     {

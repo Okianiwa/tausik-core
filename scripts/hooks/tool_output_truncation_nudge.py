@@ -22,11 +22,17 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+try:
+    from _common import SHELL_TOOL_NAMES  # noqa: E402
+except ImportError:  # pragma: no cover - the nudge is advisory
+    SHELL_TOOL_NAMES = frozenset({"Bash", "PowerShell", "mcp__windows-mcp__PowerShell"})
 
 from tausik_utils import load_effective_config  # noqa: E402
 
 DEFAULT_THRESHOLD = 250
-WATCHED_TOOLS = {"Read", "Grep", "Bash", "Glob"}
+WATCHED_TOOLS = {"Read", "Grep", "Glob"} | SHELL_TOOL_NAMES
 
 
 def _load_payload() -> dict:

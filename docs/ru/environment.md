@@ -22,7 +22,7 @@
 | Переменная | Эффект |
 |---|---|
 | `TAUSIK_SKIP_HOOKS=1` | Полный bypass хуков TAUSIK (debug). |
-| `TAUSIK_HOOK_FAIL_SECURE=1` | Если хук падает — трактовать как блок (по умолчанию fail-open). |
+| `TAUSIK_HOOK_FAIL_OPEN=1` | Если `task_gate` не может опросить БД — разрешить правку. По умолчанию такой отказ **блокирует**: ветка достижима только когда файл БД существует, значит отказ означает реальную поломку, а не незаинициализированный проект. Флаг отключает правило «нет кода без задачи». |
 | `TAUSIK_QUIET=1` | Глушит `[gates]` / `[rag]` прогресс в stderr. |
 | `TAUSIK_VERIFY_FULL=1` | Полный pytest без `-m 'not slow'`. |
 | `TAUSIK_DISABLE_SESSION_METRICS=1` | SessionEnd не пишет `session_usage_metrics`. |
