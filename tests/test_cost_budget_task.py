@@ -340,7 +340,11 @@ def _run_hook(
         [sys.executable, HOOK_PATH],
         input=json.dumps(payload or {}),
         capture_output=True,
-        text=True, encoding="utf-8",
+        text=True,
+        # Explicit: text=True decodes with the locale codepage, which on a
+        # Windows host is cp1251 — the hook's UTF-8 "2×" arrived as mojibake
+        # and the assertion failed on a message the hook had emitted correctly.
+        encoding="utf-8",
         cwd=cwd,
         env=env,
         timeout=10,

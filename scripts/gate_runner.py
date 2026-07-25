@@ -54,6 +54,7 @@ _NO_IMPL_SENTINEL = "__TAUSIK_GATE_NO_IMPL__"
 # v14b-filesize-debt-paydown: run_command_gate + _SCOPED_SKIP_SENTINEL extracted
 # to gate_command_runner.py; re-exported so tests/test_gates.py import path holds.
 from gate_command_runner import (  # noqa: F401, E402
+    _NOTHING_TO_CHECK_SENTINEL,
     _SCOPED_SKIP_SENTINEL,
     SCOPE_PREFIX,
     run_command_gate,
@@ -161,7 +162,7 @@ def run_gates(
         # Scoped-skip sentinel from run_command_gate: either relevant_files
         # were provided but no test files mapped, OR no relevant_files at
         # all (full-suite fallback removed in v1.3 — burns MCP 10s budget).
-        if output in (_SCOPED_SKIP_SENTINEL, _NO_IMPL_SENTINEL):
+        if output in (_SCOPED_SKIP_SENTINEL, _NO_IMPL_SENTINEL, _NOTHING_TO_CHECK_SENTINEL):
             if output == _NO_IMPL_SENTINEL:
                 skip_reason = (
                     f"Gate '{name}' declares no command and the framework ships no "
@@ -170,6 +171,12 @@ def run_gates(
                     f".tausik/config.json."
                 )
                 logging.getLogger("tausik.gates").warning(skip_reason)
+            elif output == _NOTHING_TO_CHECK_SENTINEL:
+                skip_reason = (
+                    "The checker's own config resolved to no source files in this "
+                    "content (e.g. a commit touching only excluded paths); gate "
+                    "skipped — nothing was checked, so there is nothing to block on."
+                )
             else:
                 skip_reason = (
                     "No test file maps to relevant_files via "

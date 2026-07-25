@@ -80,6 +80,18 @@ def _scope_label(test_files: list[str], total: int) -> str:
         f"file(s) mapped from relevant_files -- NOT the full suite: {named}"
     )
 
+# A checker invoked without {files} resolves its own scope from config (mypy:
+# files=["scripts"], exclude=["scripts/hooks/"]). On the commit trigger it judges a
+# temp tree holding ONLY staged content, so a commit touching just scripts/hooks/
+# leaves that config resolving to nothing and mypy exits non-zero with a usage
+# error - a block on a commit it never type-checked. Empty input is not a failure:
+# nothing to check is a skip. Real type errors carry a different message and still
+# block. Kept separate from the scoped sentinel so the reason names the true cause.
+_NOTHING_TO_CHECK_SENTINEL = "__TAUSIK_NOTHING_TO_CHECK__"
+_NOTHING_TO_CHECK_MARKERS = (
+    "there are no .py[i] files in directory",
+    "there are no .py[i] files in package",
+)
 
 # v1.5 v15p-fix-hadolint-windows-head: stack gate commands historically end
 # with a unix truncation pipe (`hadolint {files} 2>&1 | head -30`). On Windows
@@ -325,8 +337,11 @@ def run_command_gate(gate: dict, files: list[str]) -> tuple[bool, str]:
         if line_filter:
             output = _apply_line_filter(output, line_filter)
         if returncode == 0:
-            return True, _scoped(output or "Passed.")
-        return False, _scoped(output or f"Failed with exit code {returncode}.")
+            return True, output or "Passed."
+        low = output.lower()
+        if any(m in low for m in _NOTHING_TO_CHECK_MARKERS):
+            return True, _NOTHING_TO_CHECK_SENTINEL
+        return False, output or f"Failed with exit code {returncode}."
     except subprocess.TimeoutExpired:
         return False, _scoped(f"Gate timed out ({timeout}s).")
     except (FileNotFoundError, PermissionError, NotADirectoryError) as e:
