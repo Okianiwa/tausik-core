@@ -4,5 +4,8 @@
 # Every requirement needs an upper bound. The venv is built on the user's
 # machine at an unknown future moment, so an unbounded spec means a major
 # release breaks their MCP server, not our build. Keep the minor range open
-# so 1.x security fixes still land.
+# so 1.x security fixes still land. Concretely for mcp: 2.0.0 dropped the
+# Server.list_tools/call_tool decorators every server in harness/claude/mcp/
+# is written against, and the failure surfaces only as "Connection closed" —
+# the CLI keeps working, so the project looks healthy while MCP is dead.
 mcp>=1.0.0,<2.0.0
