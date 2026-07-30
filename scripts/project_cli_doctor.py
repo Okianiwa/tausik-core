@@ -124,25 +124,32 @@ def cmd_doctor(svc: ProjectService, args: Any) -> None:
         failures += 1
 
     # Which profile directory this project actually runs from. Hardcoding
-    # `.claude` here made `doctor` FAIL and exit 1 on every Cursor / Qwen /
-    # Kilo / OpenCode install — bootstrap deploys `.cursor/mcp`, `.qwen/mcp`
-    # and friends, and the health check declared them missing. A health check
-    # that fails healthy projects trains people to ignore it.
-    from ide_utils import missing_profile_hint, resolve_profile
+    # `.claude` made `doctor` FAIL on every Cursor / Qwen / Kilo / OpenCode
+    # install — bootstrap deploys `.cursor/`, `.qwen/` and friends, and the
+    # health check declared them missing. A health check that fails healthy
+    # projects trains people to ignore it.
+    from ide_utils import resolve_profile
 
-    ide, ide_rel = resolve_profile(project_dir)
-    mcp_project = os.path.join(project_dir, ide_rel, "mcp", "project", "server.py")
-    mcp_brain = os.path.join(project_dir, ide_rel, "mcp", "brain", "server.py")
-    if os.path.isfile(mcp_project):
-        _print_ok("MCP server (project)", f"{ide_rel}/mcp/project/server.py")
-    else:
-        hint = missing_profile_hint(project_dir, ide)
-        _print_fail("MCP server (project)", f"{ide_rel}/mcp/project/server.py {hint}")
-        failures += 1
-    if os.path.isfile(mcp_brain):
-        _print_ok("MCP server (brain)", f"{ide_rel}/mcp/brain/server.py")
-    else:
-        _print_warn("MCP server (brain)", "missing — bootstrap may have skipped it")
+    _ide, ide_rel = resolve_profile(project_dir)
+
+    # Existence of server.py proves nothing: bootstrap always writes the file,
+    # so it is there even when the server cannot start at all. The servers are
+    # therefore actually launched — see service_doctor_mcp for the failure that
+    # this replaced a file-existence check with.
+    try:
+        from service_doctor_mcp import check_mcp_servers
+
+        for severity, label, detail in check_mcp_servers(project_dir):
+            if severity == "fail":
+                _print_fail(label, detail)
+                failures += 1
+            elif severity == "warn":
+                _print_warn(label, detail)
+                warnings += 1
+            else:
+                _print_ok(label, detail)
+    except Exception as e:  # noqa: BLE001 — best-effort: баг в проверке не должен ронять doctor
+        _print_warn("MCP servers", f"could not probe: {e}")
         warnings += 1
 
     # Kilo MCP config — only fires for Kilo installs (.kilo/.kilocode present).

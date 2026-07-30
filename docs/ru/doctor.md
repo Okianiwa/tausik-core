@@ -23,9 +23,7 @@
 | **DB** | SQLite файл | `.tausik/tausik.db` существует, открывается |
 | **DB** | Schema migration | Применена последняя миграция (соответствует `backend_migrations.py`) |
 | **DB** | FTS5 индексы | Все FTS-таблицы присутствуют и query'абельны |
-| **MCP** | Project server | `.claude/mcp/project/server.py` существует |
-| **MCP** | Brain server | `.claude/mcp/brain/server.py` существует |
-| **MCP** | Server can start | `python server.py --probe` возвращает success |
+| **MCP** | Каждый сервер стартует | Все `.claude/mcp/*/server.py` реально запускаются интерпретатором из venv с закрытым stdin. Живой доходит до JSON-RPC-цикла и выходит с нулём; упавший приносит последнюю строку трейсбека. `project` — FAIL (на нём QG-0/QG-2), остальные — WARN |
 | **Skills** | Deployment | Skills присутствуют в `.claude/skills/` (количество) |
 | **Skills** | Critical skills | core skills `start`, `end`, `task`, `plan`, `checkpoint`, `commit`, `explore`, `review`, `test`, `ship`, `debug` все на месте (плюс `/brain` опционально, если настроен Notion) |
 | **Drift** | Bootstrap freshness | Файлы в `.claude/` соответствуют генераторам в `harness/`/`bootstrap/`. Drift = устаревшая сгенерированная копия. |
@@ -47,8 +45,9 @@ TAUSIK doctor — health check
 ========================================
   OK    Python venv               .tausik/venv
   OK    Project DB                .tausik/tausik.db (3136 KB)
-  OK    MCP server (project)      .claude/mcp/project/server.py
-  OK    MCP server (brain)        .claude/mcp/brain/server.py
+  OK    MCP server (brain)        starts up
+  OK    MCP server (codebase-rag) starts up
+  OK    MCP server (project)      starts up
   OK    Core skills               12 core + brain conditional, 20 vendor opt-in (all critical present)
   WARN  Bootstrap drift           1 script(s) differ — restart MCP server or re-bootstrap
   OK    Config knobs              max=180m warn=150m idle=10m capacity=200 cache_ttl=600s
@@ -75,7 +74,9 @@ Exit code отражает худший уровень: `0` для OK/WARN, `1` 
 | `FAIL Python venv` | `python -m venv .tausik/venv` (или ребутстрэп) |
 | `FAIL Project DB` | Запустите `.tausik/tausik init`, чтобы создать БД |
 | `WARN Bootstrap drift` | `python .tausik-lib/bootstrap/bootstrap.py --refresh` и рестарт MCP-сервера |
-| `FAIL MCP server` | Ребутстрэп; убедитесь, что `.claude/mcp/` сгенерирован |
+| `FAIL MCP server` | Сервер не файл, а процесс: doctor запускает каждый со закрытым stdin и показывает последнюю строку traceback. Ребутстрэп; убедитесь, что каталог `mcp/` профиля сгенерирован |
+| `FAIL MCP servers` | Ни одного `<профиль>/mcp/*/server.py` — bootstrap не отработал; запустите его заново |
+| `WARN MCP servers` | Проверка запуском пропущена: нет `.tausik/venv`, поэтому серверы не под чем стартовать |
 | `WARN Core skills` | `tausik skill list`; `tausik skill activate <name>` для отсутствующих core skills |
 | `WARN Shared Brain` | Появляется только когда `.tausik/config.json` не удалось истолковать — испорченный файл либо ключ `brain`, который не является словарём (`{"brain": true}`). Brain считается ВЫКЛЮЧЕННЫМ, как и по умолчанию, поэтому проверка от этого не падает. Почините конфиг, если Notion-brain вам нужен; игнорируйте, если нет. |
 | `WARN Backlog hygiene` | `tausik task move <slug> <story>` для каждой названной задачи — либо создайте story под них, если они образуют связную группу |
