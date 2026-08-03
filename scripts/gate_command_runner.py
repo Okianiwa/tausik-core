@@ -4,7 +4,9 @@ Extracted from gate_runner.py for filesize compliance
 (v14b-filesize-debt-paydown). Public surface:
 
     _SCOPED_SKIP_SENTINEL — return marker for skipped scoped runs
-    run_command_gate(gate, files) -> (passed, output)
+    _NOTHING_TO_CHECK_SENTINEL — marker for "the checker's config selects
+        nothing in this slice", decided before the run (gate_config_scope)
+    run_command_gate(gate, files, trigger=None) -> (passed, output)
 
 Behaviour is identical to the previous in-place implementation; gate_runner
 re-exports both names for backwards compatibility with existing callers
@@ -17,6 +19,7 @@ import os
 import shlex
 import subprocess
 
+from gate_config_scope import slice_intersects_config_scope
 from gate_test_resolver import resolve_test_files_for_relevant
 
 
@@ -24,25 +27,34 @@ _SCOPED_SKIP_SENTINEL = "__TAUSIK_SCOPED_SKIP__"
 
 # A checker invoked without {files} resolves its own scope from config (mypy:
 # files=["scripts"], exclude=["scripts/hooks/"]). On the commit trigger it judges a
-# temp tree holding ONLY staged content, so a commit touching just scripts/hooks/
-# leaves that config resolving to nothing and mypy exits non-zero with a usage
-# error - a block on a commit it never type-checked. Empty input is not a failure:
-# nothing to check is a skip. Real type errors carry a different message and still
-# block. Kept separate from the scoped sentinel so the reason names the true cause.
+# temp tree holding ONLY staged content, so a commit touching nothing inside that
+# scope leaves the checker with no sources and it exits with a USAGE error — a
+# block on a commit it never type-checked. Empty input is not a failure: nothing
+# to check is a skip. Which case this is comes from reading the checker's config
+# (gate_config_scope), not from its error prose. Kept separate from the scoped
+# sentinel so the reason names the true cause.
 _NOTHING_TO_CHECK_SENTINEL = "__TAUSIK_NOTHING_TO_CHECK__"
-_NOTHING_TO_CHECK_MARKERS = (
-    "there are no .py[i] files in directory",
-    "there are no .py[i] files in package",
-)
+
+# The slice is the whole world only on `commit` — that trigger materializes
+# staged content into a temp tree. `task-done`, `verify` and `review` run against
+# the real worktree, where an empty intersection with relevant_files means the
+# caller scoped the run, NOT that the checker has nothing to look at. Skipping
+# there would silently retire the gate.
+_SLICE_IS_THE_TREE = ("commit",)
 
 
-def run_command_gate(gate: dict, files: list[str]) -> tuple[bool, str]:
+def run_command_gate(gate: dict, files: list[str], trigger: str | None = None) -> tuple[bool, str]:
     """Run a command-based gate. Substitutes {files} / {test_files_for_files}.
 
     Special return: (True, _SCOPED_SKIP_SENTINEL) when {test_files_for_files}
     is in cmd and no test files map from a non-empty relevant_files. The
     caller (run_gates) translates this into a skipped_result entry so the
     UI shows SKIP, not PASS, and we don't run an irrelevant full suite.
+
+    Also (True, _NOTHING_TO_CHECK_SENTINEL) when `trigger` is one where `files`
+    IS the tree being judged and the checker's own config selects nothing in it.
+    Absent `trigger`, that skip never fires — a caller that does not say which
+    trigger it is gets the gate run, not waived.
     """
     cmd = gate.get("command", "")
     if not cmd:
@@ -59,6 +71,14 @@ def run_command_gate(gate: dict, files: list[str]) -> tuple[bool, str]:
         files = [f for f in files if os.path.splitext(f)[1].lower() in allowed]
         if not files:
             return True, ("No files matching " + ", ".join(sorted(allowed)) + " — gate skipped.")
+
+    # Decided from the checker's config, BEFORE the run — see gate_config_scope
+    # for why reading its error text does not work. `None` = no opinion (unknown
+    # tool, unreadable config): run the gate.
+    if trigger in _SLICE_IS_THE_TREE:
+        in_scope = slice_intersects_config_scope(gate, files)
+        if in_scope is False:
+            return True, _NOTHING_TO_CHECK_SENTINEL
 
     if "{test_files_for_files}" in cmd:
         test_files = resolve_test_files_for_relevant(files)
@@ -113,9 +133,6 @@ def run_command_gate(gate: dict, files: list[str]) -> tuple[bool, str]:
         output = (result.stdout + result.stderr).strip()
         if result.returncode == 0:
             return True, output or "Passed."
-        low = output.lower()
-        if any(m in low for m in _NOTHING_TO_CHECK_MARKERS):
-            return True, _NOTHING_TO_CHECK_SENTINEL
         return False, output or f"Failed with exit code {result.returncode}."
     except subprocess.TimeoutExpired:
         return False, f"Gate timed out ({timeout}s)."

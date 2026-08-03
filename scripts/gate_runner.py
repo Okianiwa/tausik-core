@@ -137,7 +137,7 @@ def run_gates(
         elif name == "bootstrap_drift":
             passed, output = run_bootstrap_drift_gate(gate, files or [])
         else:
-            passed, output = run_command_gate(gate, files or [])
+            passed, output = run_command_gate(gate, files or [], trigger=trigger)
 
         # Scoped-skip sentinel from run_command_gate: either relevant_files
         # were provided but no test files mapped, OR no relevant_files at
@@ -145,9 +145,11 @@ def run_gates(
         if output in (_SCOPED_SKIP_SENTINEL, _NOTHING_TO_CHECK_SENTINEL):
             if output == _NOTHING_TO_CHECK_SENTINEL:
                 skip_reason = (
-                    "The checker's own config resolved to no source files in this "
-                    "content (e.g. a commit touching only excluded paths); gate "
-                    "skipped — nothing was checked, so there is nothing to block on."
+                    f"NOT RUN: `{gate.get('command', name)}` selects its own inputs "
+                    "from its config (mypy: [tool.mypy] files/exclude in "
+                    "pyproject.toml), and no staged file falls inside that scope. "
+                    "The checker was never invoked — nothing was verified here, so "
+                    "there is nothing to block on. This is not a passing check."
                 )
             else:
                 skip_reason = (
@@ -226,7 +228,11 @@ def format_results(results: list[dict]) -> str:
             icon = "FAIL"
         sev = f" ({r['severity']})" if not r["passed"] else ""
         lines.append(f"  [{icon}] {r['name']}{sev}")
-        if not r["passed"] and r["output"]:
+        # SKIP prints its reason too: a skipped gate verified NOTHING, and a bare
+        # [SKIP] beside a [PASS] reads as "checked, fine". Naming why — which
+        # config selected no inputs — is the difference between a waived gate the
+        # reader can audit and one that quietly stopped mattering.
+        if r["output"] and (not r["passed"] or r.get("skipped")):
             for line in r["output"].split("\n")[:5]:
                 lines.append(f"         {line}")
     return "\n".join(lines)

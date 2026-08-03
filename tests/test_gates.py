@@ -254,33 +254,29 @@ class TestGateRunner:
         """A stand-in for a config-driven checker (mypy) with a fixed verdict."""
         script = tmp_path / "fake_checker.py"
         script.write_text(
-            "import sys\n"
-            f"sys.stderr.write({message!r})\n"
-            f"sys.exit({exit_code})\n",
+            f"import sys\nsys.stderr.write({message!r})\nsys.exit({exit_code})\n",
             encoding="utf-8",
         )
         # as_posix: the runner shlex-splits with posix=True, which eats backslashes.
         return {"command": f"python {script.as_posix()}"}
 
-    def test_command_gate_skips_when_the_checker_has_nothing_to_check(self, tmp_path):
-        """Empty input is not a failure.
+    def test_a_usage_error_from_the_checker_is_still_a_failure(self, tmp_path):
+        """The prose is no longer a signal — only the config decides a skip.
 
-        mypy reads files=/exclude= from pyproject, so on the commit trigger — which
-        judges a temp tree of ONLY staged content — a commit touching just
-        scripts/hooks/ (excluded) leaves it with no sources and a usage error.
-        Blocking there rejects a commit nothing was checked in.
+        This is the mutation guard for AC1: matching mypy's wording was tried
+        (cd9db84) and missed a third phrasing, so the wording must not be able to
+        wave a gate through on its own. Same message the old marker list caught,
+        no config saying it is out of scope -> block.
         """
-        gate = self._fake_checker(
-            tmp_path, "There are no .py[i] files in directory 'scripts'\n", 2
-        )
-        passed, output = run_command_gate(gate, [])
-        assert passed is True
-        assert output == _NOTHING_TO_CHECK_SENTINEL
+        gate = self._fake_checker(tmp_path, "There are no .py[i] files in directory 'scripts'\n", 2)
+        passed, output = run_command_gate(gate, [], trigger="commit")
+        assert passed is False
+        assert output != _NOTHING_TO_CHECK_SENTINEL
 
     def test_command_gate_still_blocks_on_a_real_type_error(self, tmp_path):
         """The negative half: the skip must not swallow honest failures."""
         gate = self._fake_checker(
-            tmp_path, 'scripts/x.py:3: error: Incompatible return value type\n', 1
+            tmp_path, "scripts/x.py:3: error: Incompatible return value type\n", 1
         )
         passed, output = run_command_gate(gate, [])
         assert passed is False
