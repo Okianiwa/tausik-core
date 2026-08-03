@@ -156,9 +156,17 @@ def run_gates(
                     "No test file maps to relevant_files via "
                     "tests/test_<basename>.py heuristic; gate skipped (scoped run)."
                     if files
+                    # The advice names `task update`, NOT `verify`: `tausik verify`
+                    # accepts only --task/--scope, so the older wording ("pass
+                    # --relevant-files") sent anyone who followed it literally into
+                    # an argparse error. A remediation line is only as good as the
+                    # command it names.
                     else (
-                        "No relevant_files passed; gate skipped. Pass relevant_files "
-                        "for actual verification (e.g. --relevant-files src/foo.py)."
+                        "No relevant_files on the task, so this scoped gate had nothing "
+                        "to run against — it was SKIPPED, not passed. Set them with "
+                        "`tausik task update <slug> --relevant-files FILE ...` (or pass "
+                        "--relevant-files to `task done`), then re-run verify. Note: "
+                        "`tausik verify` itself takes no --relevant-files flag."
                     )
                 )
             results.append(

@@ -61,7 +61,11 @@ def main(argv: list[str] | None = None) -> int:
     sys.stderr.write(proc.stderr or proc.stdout)
     sys.stderr.write(
         "\n[check_docs] doc-constants drift — run "
-        "`python scripts/gen_doc_constants.py` and re-commit.\n"
+        "`python scripts/gen_doc_constants.py`, `git add` what it changed, "
+        "and re-commit.\n"
+        "[check_docs] It rewrites docs/_generated/constants.json AND the "
+        "test-count refs in README.md / README.ru.md — both are judged here, so "
+        "staging only the JSON leaves this hook red.\n"
     )
     return 1
 

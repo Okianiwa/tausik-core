@@ -29,78 +29,21 @@ import subprocess
 import sys
 from pathlib import Path
 
+from doc_test_count_fix import fix_test_counts
 from mcp_tool_counts import mcp_counts_flat
 from pytest_test_count import count_tests
 
-_VERSION_RE = re.compile(r"\bv(\d+)\.(\d+)(?:\.(\d+))?(?:\.x)?\b")
-_FENCED_BLOCK_RE = re.compile(r"^```.*?^```", re.MULTILINE | re.DOTALL)
-
-CROSS_FILE_SCAN_TARGETS: tuple[str, ...] = (
-    "README.md",
-    "README.ru.md",
-    "AGENTS.md",
-    "CLAUDE.md",
-    "docs/en/architecture.md",
-    "docs/ru/architecture.md",
-    "docs/en/mcp.md",
-    "docs/ru/mcp.md",
-)
-
-# RU/EN word for "tool" in MCP-count contexts. Matches singular + plural genitive
-# forms: tools, tool, инструмент, инструмента, инструментов.
-_TOOL_WORD = r"(?:tools?|инструмент(?:а|ов)?)"
-
-# MCP tool-count patterns. Each entry is (compiled regex, constants_key, label).
-# The capture group is a single integer compared against constants.json[key].
-# Patterns are ordered specific-first so context-rich matches (brain header)
-# fire before generic ones (`X project tools`).
-_MCP_COUNT_PATTERNS: tuple[tuple[re.Pattern[str], str, str], ...] = (
-    # `tausik-brain`, N tools — brain server header, e.g. "## Shared Brain (`tausik-brain`, 7 tools)"
-    (
-        re.compile(rf"`tausik-brain`[^)]*?,\s*(\d+)\s+{_TOOL_WORD}", re.IGNORECASE),
-        "mcp_brain_tools",
-        "tausik-brain server header",
-    ),
-    # **N tools** / **N MCP tools** / **N MCP-инструментов** — markdown bold main count
-    (
-        re.compile(rf"\*\*(\d+)\s+(?:MCP[-\s]+)?{_TOOL_WORD}\*\*", re.IGNORECASE),
-        "mcp_main_tools",
-        "main count (bold)",
-    ),
-    # N project tools — explicit project count, e.g. "93 project tools"
-    (
-        re.compile(rf"\b(\d+)\s+project\s+{_TOOL_WORD}\b", re.IGNORECASE),
-        "mcp_project_tools",
-        "project count",
-    ),
-    # N brain tools — explicit brain count, e.g. "7 brain tools"
-    (
-        re.compile(rf"\b(\d+)\s+brain\s+{_TOOL_WORD}\b", re.IGNORECASE),
-        "mcp_brain_tools",
-        "brain count",
-    ),
-)
-
-# Pair pattern: "(N project + M brain ...)" — both groups checked independently.
-_MCP_COUNT_PAIR_PATTERN: tuple[re.Pattern[str], tuple[str, str], str] = (
-    re.compile(r"\((\d+)\s+project\s*\+\s*(\d+)\s+brain", re.IGNORECASE),
-    ("mcp_project_tools", "mcp_brain_tools"),
-    "project+brain pair",
-)
-
-# Test-count patterns. Each entry is (compiled regex, label). The capture
-# group is a single integer compared against constants.json["test_count"].
-# Patterns are deliberately narrow to avoid false positives on illustrative
-# numbers like "Never add 5 tests where one parametrized test covers".
-_TEST_COUNT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
-    # "pytest suite (N tests)"
-    (re.compile(r"pytest\s+suite\s+\((\d+)\s+tests?\)", re.IGNORECASE), "pytest suite count"),
-    # Badge URL: "tests-2590%20passed-brightgreen"
-    (re.compile(r"tests-(\d+)%20passed", re.IGNORECASE), "badge URL count"),
-    # Badge alt-text: "[![2590 tests](...)]"
-    (re.compile(r"!\[(\d+)\s+tests?\]"), "badge label count"),
-    # Markdown bold: "**N tests**" (used in changelogs / release notes)
-    (re.compile(r"\*\*(\d+)\s+tests?\*\*"), "bold tests count"),
+# Declarations moved to doc_drift_patterns (filesize gate); re-exported so
+# `from gen_doc_constants import CROSS_FILE_SCAN_TARGETS` keeps working.
+from doc_drift_patterns import (  # noqa: E402,F401
+    _FENCED_BLOCK_RE,
+    _FOREIGN_VERSION_PREFIXES,
+    _MCP_COUNT_PAIR_PATTERN,
+    _MCP_COUNT_PATTERNS,
+    _TEST_COUNT_PATTERNS,
+    _TOOL_WORD,
+    _VERSION_RE,
+    CROSS_FILE_SCAN_TARGETS,
 )
 
 
@@ -193,9 +136,6 @@ def _version_matches(major: int, minor: int, patch: int | None, expected: str) -
     if patch is None:
         return major == exp_major and minor == exp_minor
     return major == exp_major and minor == exp_minor and patch == exp_patch
-
-
-_FOREIGN_VERSION_PREFIXES: tuple[str, ...] = ("SENAR", "Python", "OWASP")
 
 
 def _is_foreign_version(text: str, match_start: int) -> bool:
@@ -381,6 +321,22 @@ def run_main(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_json(payload), encoding="utf-8")
     print(f"Wrote {path}")
+    # The cross-file refs `--check` judges are fixed here too. Writing only the
+    # JSON left the badges stale AND moved test_count out from under them, so
+    # following the printed advice turned a green --check red. A remediation
+    # step has to end at a passing state, not at a different failure.
+    if not skip_cross_files and not skip_test_count:
+        expected = payload.get("test_count")
+        if isinstance(expected, int):
+            touched = fix_test_counts(
+                repo_root,
+                expected,
+                CROSS_FILE_SCAN_TARGETS,
+                _TEST_COUNT_PATTERNS,
+                _FENCED_BLOCK_RE,
+            )
+            for rel in touched:
+                print(f"Updated test-count refs in {rel} -> {expected}")
     return 0
 
 

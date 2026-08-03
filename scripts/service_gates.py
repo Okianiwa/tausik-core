@@ -33,6 +33,7 @@ from gate_qg0_check import (  # noqa: F401
     check_qg0_start,
 )
 from gate_qg0_score import qg0_dimensions_score  # noqa: F401
+from gate_verify_warning import build_verify_warning
 from tausik_utils import ServiceError
 
 if TYPE_CHECKING:
@@ -83,6 +84,7 @@ class GatesMixin:
                 except (TypeError, ValueError):
                     files = []
             task_created_at = task.get("created_at")
+        cache_row: dict[str, Any] = {}
         passed, results, status = run_gates_with_cache(
             self.be._conn,
             task_slug or "",
@@ -91,33 +93,24 @@ class GatesMixin:
             append_notes_fn=(self.be.task_append_notes if task_slug else None),
             task_created_at=task_created_at,
             trigger=trigger,
+            cache_hit_fn=cache_row.update,
         )
-        # Silent-trap guard (verify-skipped-silent-nocache): verify can report
-        # passed=True while EVERY gate was SKIPPED (no tests mapped — e.g. a
-        # docs-only or non-Python deliverable). run_gates_with_cache refuses to
-        # record an all-skipped run as green (see service_verification
-        # has_real_pass), so a follow-up `task done` Verify-First finds nothing
-        # and blocks with a confusing "no fresh verify run". Surface it loudly
-        # via `cached`/`warning` so callers don't read a bare passed=True as
-        # "verified & cached".
+        # Silent-trap guards: a bare passed=True can mean "every gate skipped"
+        # or "hit a cached row an operator asserted". Wording lives in
+        # gate_verify_warning — see it for why each case is not a plain green.
         has_real_pass = any(r.get("passed") and not r.get("skipped") for r in (results or []))
         manual_asserted = scope == "manual"
         cached = status == "hit" or (passed and (has_real_pass or manual_asserted))
         from verify_cache import resolve_gate_signature
 
-        gates_configured = resolve_gate_signature(trigger) not in ("empty", "unavailable")
-        warning = None
-        if passed and not has_real_pass and status != "hit" and gates_configured:
-            if manual_asserted:  # honored: записан asserted-green, не советуем повторно
-                warning = (
-                    "RECORDED AS MANUAL (asserted) — no real gate pass (skipped/no tests), but "
-                    "scope='manual' recorded it. `task done` Verify-First will see it."
-                )
-            else:
-                warning = (
-                    "NOT CACHED — verify PASSED but no gate produced a real pass (skipped/no tests "
-                    "mapped). `task done` won't see it. Use scope='manual' or add tests."
-                )
+        warning = build_verify_warning(
+            passed=passed,
+            status=status,
+            has_real_pass=has_real_pass,
+            manual_asserted=manual_asserted,
+            gates_configured=(resolve_gate_signature(trigger) not in ("empty", "unavailable")),
+            cache_row=cache_row,
+        )
         return {
             "passed": passed,
             "status": status,
@@ -135,16 +128,22 @@ class GatesMixin:
         Threads optional `audit_check` / `session_check_duration` callbacks
         from the composing service (ProjectService) when available.
         """
-        return check_qg0_start(
+        # Annotated hand-off, here and in the three delegates below: the commit
+        # trigger judges staged files alone, so the absent gate_* modules type as
+        # Any and each delegate trips no-any-return. Stopgap for these four sites
+        # — task mypy-commit-slice-any-false-block owns the class.
+        errors: list[str] = check_qg0_start(
             slug,
             task,
             audit_check_fn=getattr(self, "audit_check", None),
             session_check_duration_fn=getattr(self, "session_check_duration", None),
         )
+        return errors
 
     def _verify_ac(self, slug: str, task: dict[str, Any], ac_verified: bool) -> list[str]:
         """QG-2 AC verification — delegates to gate_ac_check.verify_ac."""
-        return verify_ac(slug, task, ac_verified)
+        errors: list[str] = verify_ac(slug, task, ac_verified)
+        return errors
 
     def _verify_plan_complete(self, slug: str, task: dict[str, Any]) -> None:
         """Plan-complete check — delegates to gate_ac_check.verify_plan_complete."""
@@ -156,11 +155,13 @@ class GatesMixin:
         relevant_files: list[str] | None = None,
     ) -> str:
         """Tier auto-detect — delegates to gate_ac_check.determine_checklist_tier."""
-        return determine_checklist_tier(task, relevant_files)
+        tier: str = determine_checklist_tier(task, relevant_files)
+        return tier
 
     def _check_verification_checklist(self, slug: str, task: dict[str, Any]) -> str:
         """SENAR Rule 5 checklist — delegates to gate_ac_check.check_verification_checklist."""
-        return check_verification_checklist(task)
+        report: str = check_verification_checklist(task)
+        return report
 
     @staticmethod
     def _extract_files_from_gate_output(output: str) -> list[str]:

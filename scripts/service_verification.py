@@ -147,6 +147,7 @@ def run_gates_with_cache(
     task_created_at: str | None = None,
     progress_fn: Callable[[dict[str, Any]], None] | None = None,
     trigger: str = "task-done",
+    cache_hit_fn: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[bool, list[dict[str, Any]], str | None]:
     """SENAR Rule 5 cache-aware gate run.
 
@@ -167,6 +168,13 @@ def run_gates_with_cache(
     "git-mismatch") to prevent the bypass where a misreported file scope
     masks a security-sensitive change. None or empty falls back to the
     pre-v1.3.4 behavior (security-only bypass).
+
+    `cache_hit_fn(row)` (optional) receives the `verification_runs` row that
+    satisfied the lookup, on either hit path. Callers need it to tell a hit on a
+    REAL gate pass from a hit on a `scope='manual'` asserted row: the return
+    value cannot — `results` is empty on a hit, so `has_real_pass` is False for
+    both, and reporting them alike lets an asserted green read as a verified one.
+    An extra return element was rejected: ~30 call sites unpack exactly three.
 
     Concurrency note: two simultaneous `task done` calls for the same slug
     both miss cache, both run gates, both `record_run`. SQLite WAL keeps this
@@ -212,6 +220,8 @@ def run_gates_with_cache(
                     f"Gates: cache hit (verify run #{hit['id']}, "
                     f"ran_at={hit['ran_at']}, scope={hit['scope']})",
                 )
+            if cache_hit_fn is not None:
+                cache_hit_fn(dict(hit))
             return True, [], "hit"
         # v14-cache-relaxed-mismatch-hit: a strict miss is acceptable for the
         # specific Sharp edge where verify ran with `files=[]` (manual scope —
@@ -236,6 +246,8 @@ def run_gates_with_cache(
                         f"recorded with files=[] (manual scope), "
                         f"ran_at={relaxed['ran_at']}, scope={relaxed['scope']})",
                     )
+                if cache_hit_fn is not None:
+                    cache_hit_fn(dict(relaxed))
                 return True, [], "hit"
 
     t0 = _time.monotonic()
@@ -286,8 +298,12 @@ def run_gates_with_cache(
         if append_notes_fn is not None:
             append_notes_fn(
                 slug,
+                # Same correction as gate_runner's skip reason: the flag lives on
+                # `task update` / `task done`, never on `verify`.
                 "WARN: no relevant_files passed — scoped gates SKIPPED. "
-                "v1.3 removed full-suite fallback. Pass --relevant-files for verification.",
+                "v1.3 removed full-suite fallback. Set them with "
+                "`tausik task update <slug> --relevant-files FILE ...`, then re-run "
+                "verify (`tausik verify` has no --relevant-files flag of its own).",
             )
     # v1.3 blind-review pass: If relevant_files was supplied but EVERY gate was skipped (no
     # test mapped, source-without-test), don't pass as green. Report a synthetic

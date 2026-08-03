@@ -246,9 +246,13 @@ def test_run_main_check_passes_with_skip_test_count(
     import gen_doc_constants as g
 
     repo = _seed_cross_file_repo(tmp_path)
-    (repo / "AGENTS.md").write_text("pytest suite (2590 tests)\n", encoding="utf-8")
     monkeypatch.setattr(g, "build_constants_doc", lambda _root: dict(_FAKE_TEST_COUNT_PAYLOAD))
     assert run_main(repo, check=False) == 0
+    # Seed the drift AFTER generating: since remediation-advice-does-not-remediate,
+    # a non-check run also REWRITES cross-file test-count refs, so a drift planted
+    # before it would simply be repaired and there would be nothing left to detect.
+    # The subject here is the --skip-test-count switch, not the repair.
+    (repo / "AGENTS.md").write_text("pytest suite (2590 tests)\n", encoding="utf-8")
     assert run_main(repo, check=True) == 1
     assert run_main(repo, check=True, skip_test_count=True) == 0
 
