@@ -21,9 +21,7 @@
 | **DB** | SQLite файл | `.tausik/tausik.db` существует, открывается |
 | **DB** | Schema migration | Применена последняя миграция (соответствует `backend_migrations.py`) |
 | **DB** | FTS5 индексы | Все FTS-таблицы присутствуют и query'абельны |
-| **MCP** | Project server | `.claude/mcp/project/server.py` существует |
-| **MCP** | Brain server | `.claude/mcp/brain/server.py` существует |
-| **MCP** | Server can start | `python server.py --probe` возвращает success |
+| **MCP** | Каждый сервер стартует | Все `.claude/mcp/*/server.py` реально запускаются интерпретатором из venv с закрытым stdin. Живой доходит до JSON-RPC-цикла и выходит с нулём; упавший приносит последнюю строку трейсбека. `project` — FAIL (на нём QG-0/QG-2), остальные — WARN |
 | **Skills** | Deployment | Skills присутствуют в `.claude/skills/` (количество) |
 | **Skills** | Critical skills | core skills `start`, `end`, `task`, `plan`, `review`, `brain`, `ship`, `checkpoint` все на месте |
 | **Drift** | Bootstrap freshness | Файлы в `.claude/` соответствуют генераторам в `harness/`/`bootstrap/`. Drift = устаревшая сгенерированная копия. |
@@ -38,8 +36,9 @@ TAUSIK doctor — health check
 ========================================
   OK    Python venv               .tausik/venv
   OK    Project DB                .tausik/tausik.db (3136 KB)
-  OK    MCP server (project)      .claude/mcp/project/server.py
-  OK    MCP server (brain)        .claude/mcp/brain/server.py
+  OK    MCP server (brain)        starts up
+  OK    MCP server (codebase-rag) starts up
+  OK    MCP server (project)      starts up
   OK    Core skills               12 core + brain conditional, 20 vendor opt-in (all critical present)
   WARN  Bootstrap drift           1 script(s) differ — restart MCP server or re-bootstrap
   OK    Config knobs              max=180m warn=150m idle=10m capacity=200 cache_ttl=600s

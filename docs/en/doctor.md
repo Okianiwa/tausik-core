@@ -21,9 +21,7 @@ Or via MCP: `tausik_doctor` (no parameters). The MCP variant returns the same da
 | **DB** | SQLite file | `.tausik/tausik.db` exists, openable |
 | **DB** | Schema migration | Latest migration applied (matches `backend_migrations.py`) |
 | **DB** | FTS5 indexes | All FTS tables present and queryable |
-| **MCP** | Project server | `.claude/mcp/project/server.py` exists |
-| **MCP** | Brain server | `.claude/mcp/brain/server.py` exists |
-| **MCP** | Server can start | `python server.py --probe` returns success |
+| **MCP** | Every server starts | Each `.claude/mcp/*/server.py` is actually launched with the venv interpreter and a closed stdin. A healthy one reaches the JSON-RPC loop and exits zero; a broken one reports the last traceback line. `project` is FAIL (it carries QG-0/QG-2), the others WARN |
 | **Skills** | Deployment | Skills present in `.claude/skills/` (count) |
 | **Skills** | Critical skills | core skills `start`, `end`, `task`, `plan`, `review`, `brain`, `ship`, `checkpoint` all present |
 | **Drift** | Bootstrap freshness | Files in `.claude/` match generators in `harness/`/`bootstrap/`. Drift = stale generated copy. |
@@ -38,8 +36,9 @@ TAUSIK doctor — health check
 ========================================
   OK    Python venv               .tausik/venv
   OK    Project DB                .tausik/tausik.db (3136 KB)
-  OK    MCP server (project)      .claude/mcp/project/server.py
-  OK    MCP server (brain)        .claude/mcp/brain/server.py
+  OK    MCP server (brain)        starts up
+  OK    MCP server (codebase-rag) starts up
+  OK    MCP server (project)      starts up
   OK    Core skills               12 core + brain conditional, 20 vendor opt-in (all critical present)
   WARN  Bootstrap drift           1 script(s) differ — restart MCP server or re-bootstrap
   OK    Config knobs              max=180m warn=150m idle=10m capacity=200 cache_ttl=600s

@@ -123,17 +123,24 @@ def cmd_doctor(svc: ProjectService, args: Any) -> None:
         _print_fail("Project DB", "not found — run: tausik init")
         failures += 1
 
-    mcp_project = os.path.join(project_dir, ".claude", "mcp", "project", "server.py")
-    mcp_brain = os.path.join(project_dir, ".claude", "mcp", "brain", "server.py")
-    if os.path.isfile(mcp_project):
-        _print_ok("MCP server (project)", ".claude/mcp/project/server.py")
-    else:
-        _print_fail("MCP server (project)", "missing — re-run bootstrap")
-        failures += 1
-    if os.path.isfile(mcp_brain):
-        _print_ok("MCP server (brain)", ".claude/mcp/brain/server.py")
-    else:
-        _print_warn("MCP server (brain)", "missing — bootstrap may have skipped it")
+    # Existence of server.py proves nothing: bootstrap always writes the file,
+    # so it is there even when the server cannot start at all. The servers are
+    # therefore actually launched — see service_doctor_mcp for the failure that
+    # this replaced a file-existence check with.
+    try:
+        from service_doctor_mcp import check_mcp_servers
+
+        for severity, label, detail in check_mcp_servers(project_dir):
+            if severity == "fail":
+                _print_fail(label, detail)
+                failures += 1
+            elif severity == "warn":
+                _print_warn(label, detail)
+                warnings += 1
+            else:
+                _print_ok(label, detail)
+    except Exception as e:  # noqa: BLE001 — best-effort: баг в проверке не должен ронять doctor
+        _print_warn("MCP servers", f"could not probe: {e}")
         warnings += 1
 
     skills_dir = os.path.join(project_dir, ".claude", "skills")

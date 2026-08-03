@@ -1,3 +1,8 @@
 # TAUSIK core dependencies
 # Installed into .tausik/venv/ by bootstrap
-mcp>=1.0.0
+# Потолок <2 обязателен: mcp 2.0.0 убрал декораторы Server.list_tools/call_tool
+# (вместо Server — MCPServer), на которых написаны все шесть серверов в
+# harness/claude/mcp/ и harness/cursor/mcp/. Без потолка bootstrap ставит 2.x,
+# серверы падают на старте, а хост показывает только "Connection closed" —
+# CLI при этом работает, и проект выглядит здоровым.
+mcp>=1.0.0,<2
