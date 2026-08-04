@@ -65,17 +65,17 @@ CLI: ВСЕГДА `.tausik/tausik <команда>`. НИКОГДА `python scri
 
 <!-- DYNAMIC:START -->
 ## Current State
-Session: none | Branch: fix/hook-tool-coverage | Version: 1.4.0
-Tasks: 71/93 done, 0 active, 1 blocked
+Session: #40 (active) | Branch: fix/hook-tool-coverage | Version: 1.4.0
+Tasks: 71/94 done, 0 active, 1 blocked
 Blocked: asynchronus-ci-annotations-lookup
 
 ### Memory tail
 Decisions (5):
+- #66 CoreBudget.SHARE остаётся 1.0 (все логические ядра): свип воркеров на 50k ОПРОВЕРГ гипотезу о вреде SMT — 1 поток на физ
 - #65 mypy на commit-триггере не судит no-any-return: на неполном срезе этот код структурно недостоверен. Механизм — новый клю
 - #64 Реестр гейтов — свойство ПРОЕКТА, а не места запуска кода: default_registry() резолвит builtin-стеки из каталога .claude
 - #63 Генератор doc-констант сам правит cross-file ссылки на число тестов, а не только constants.json
 - #62 Обстоятельства кэш-попадания пробрасываются необязательным колбэком cache_hit_fn, а не четвёртым элементом кортежа возвр
-- #61 Гейт, читающий область проверки из своего конфига, судит применимость по КОНФИГУ до запуска, а не по тексту своей ошибки
 Conventions (5):
 - #131 Ложный блок гейта закрывают замером кодов ошибок, а не аннотацией точек
 - #129 Совет ремедиации проверяют исполнением текста, а не чтением глазами
