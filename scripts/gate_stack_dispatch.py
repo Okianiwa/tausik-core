@@ -66,9 +66,14 @@ def _build_dispatch_tables() -> tuple[
     matching the previous hardcoded behaviour.
     """
     try:
-        from stack_registry import default_registry
+        from stack_registry import catalog_registry
 
-        reg = default_registry()
+        # Catalog, not the active registry: "which stack does a .ts file belong
+        # to" is a question about the language, not about this project. Scoping
+        # it to deployed stacks would silently strand a user-defined gate that
+        # declares `stacks: ["typescript"]` — it would match nothing and never
+        # run. Gate selection is already scoped by DEFAULT_GATES.
+        reg = catalog_registry()
         ext: dict[str, set[str]] = {}
         files: dict[str, set[str]] = {}
         hints: dict[str, set[str]] = {}

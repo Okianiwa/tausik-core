@@ -39,13 +39,25 @@ UNIVERSAL_GATES: dict[str, dict] = {
         # --ignore-missing-imports is required by the commit trigger, not by
         # taste: the hook judges the index from a temp tree holding only staged
         # files, so every unstaged neighbour reads as a missing module and a
-        # plain `mypy` rejects any commit touching an importing module. The
-        # cost is bounded and measured — types crossing into files absent from
-        # the staged slice degrade to Any, while errors inside the slice
-        # (including between two files changed together) are still caught.
-        # task-done runs the same command against the real worktree, where the
-        # graph is complete, so that blind spot closes before the task closes.
+        # plain `mypy` rejects any commit touching an importing module.
+        #
+        # The Any that neighbour degrades to costs more than blind spots. This
+        # comment used to say the cost was "bounded and measured" and one-sided
+        # — types crossing out of the slice merely going unchecked. Measured
+        # again, it is two-sided: a one-line delegate (`return self.be.get(x)`)
+        # returns Any the moment its neighbour is out of the slice, and
+        # no-any-return then BLOCKS a commit whose code the full tree accepts.
+        # Scan of scripts/, each module materialized alone exactly as the hook
+        # does it: 23 of 150 modules fail, 64 sites — and all 64 are
+        # no-any-return. The degradation produces no other error code, so the
+        # whole class is closed by dropping that one code on that one trigger
+        # (trigger_args below) rather than by annotating call sites, of which
+        # there would be 64 and counting (task mypy-commit-slice-any-false-block).
+        #
+        # no-any-return keeps running on task-done, against the real worktree
+        # where the graph is complete and the verdict means something.
         "command": "mypy --ignore-missing-imports",
+        "trigger_args": {"commit": "--disable-error-code=no-any-return"},
         "description": "Type-check with mypy (staged slice on commit, full graph on task-done)",
         "file_extensions": [".py"],
     },
@@ -60,7 +72,13 @@ UNIVERSAL_GATES: dict[str, dict] = {
     "bandit": {
         "enabled": False,
         "severity": "warn",
-        "trigger": ["review"],
+        # Was ["review"] — a trigger nothing in production ever fired, which
+        # made bandit unreachable by construction: `tausik review` records
+        # L1/L2/L3 runs (SENAR 10.15) and never invokes gates, and the CLI
+        # accepted `review` only to run an empty set. Moved to `verify`, beside
+        # the other heavy checks, rather than `commit`: it scans a file tree,
+        # not a diff (task gates-registry-split-cli-vs-hook).
+        "trigger": ["verify"],
         "command": "bandit -r {files} -q",
         "description": "Security scan with bandit",
     },
@@ -123,4 +141,30 @@ def _build_default_gates() -> dict[str, dict]:
     return merged
 
 
+def _build_catalog_gates() -> dict[str, dict]:
+    """Every gate TAUSIK ships, whether or not this project deploys its stack.
+
+    Not what the runner selects from — that is `DEFAULT_GATES`, scoped to the
+    project. This one answers "does gate X exist and how is it declared", which
+    is what documentation and the tests of the shipped catalog ask.
+    """
+    merged: dict[str, dict] = dict(UNIVERSAL_GATES)
+    try:
+        from stack_registry import catalog_registry
+
+        reg = catalog_registry()
+        for name in sorted(reg.all_stacks()):
+            for gname, gcfg in reg.gates_for(name).items():
+                merged.setdefault(gname, dict(gcfg))
+    except Exception:  # noqa: BLE001 — mirrors _build_stack_scoped_gates
+        import logging
+
+        logging.getLogger("tausik.default_gates").warning(
+            "Stack catalog unavailable — CATALOG_GATES limited to universal gates.",
+            exc_info=True,
+        )
+    return merged
+
+
 DEFAULT_GATES: dict[str, dict] = _build_default_gates()
+CATALOG_GATES: dict[str, dict] = _build_catalog_gates()

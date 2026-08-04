@@ -102,17 +102,20 @@ class TestGetGatesForTrigger:
         assert "ruff" not in names  # commit-only
 
     def test_verify_gates(self):
-        """v1.4: heavy subprocess gates fire on `tausik verify`, not task_done."""
-        gates = get_gates_for_trigger("verify", {})
-        names = {g["name"] for g in gates}
-        assert "pytest" in names
+        """v1.4: heavy subprocess gates fire on `tausik verify`, not task_done.
 
-    def test_review_gates(self):
-        gates = get_gates_for_trigger("review", {})
+        Also holds what `review` used to assert: that trigger fired for nothing
+        in production, so gates parked on it could not run at all
+        (task gates-registry-split-cli-vs-hook).
+        """
+        gates = get_gates_for_trigger("verify", {})
         names = {g["name"] for g in gates}
         assert "pytest" in names
         # bandit is disabled by default
         assert "bandit" not in names
+
+    def test_review_is_no_longer_a_trigger(self):
+        assert get_gates_for_trigger("review", {}) == []
 
     def test_disabled_gate_excluded(self):
         cfg = {"gates": {"pytest": {"enabled": False}}}
@@ -122,7 +125,7 @@ class TestGetGatesForTrigger:
 
     def test_enabled_bandit_included(self):
         cfg = {"gates": {"bandit": {"enabled": True}}}
-        gates = get_gates_for_trigger("review", cfg)
+        gates = get_gates_for_trigger("verify", cfg)
         names = {g["name"] for g in gates}
         assert "bandit" in names
 
@@ -395,7 +398,12 @@ class TestStackGates:
         assert "tsc" in STACK_GATE_MAP["typescript"]
 
     def test_all_stack_gates_disabled_by_default(self):
-        gates = load_gates({})
+        """Asserted against the catalog: `load_gates` resolves the ACTIVE
+        registry, which on a python project holds none of these. That they ship
+        disabled is a property of the shipped declarations."""
+        from default_gates import CATALOG_GATES
+
+        gates = CATALOG_GATES
         for name in (
             "tsc",
             "eslint",

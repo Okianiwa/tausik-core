@@ -25,7 +25,7 @@ def svc(tmp_path):
 
 class TestGateRegistration:
     def test_go_test_in_defaults(self):
-        from project_config import DEFAULT_GATES
+        from default_gates import CATALOG_GATES as DEFAULT_GATES
 
         assert "go-test" in DEFAULT_GATES
         gate = DEFAULT_GATES["go-test"]
@@ -36,7 +36,7 @@ class TestGateRegistration:
         assert "go test" in gate["command"]
 
     def test_cargo_test_in_defaults(self):
-        from project_config import DEFAULT_GATES
+        from default_gates import CATALOG_GATES as DEFAULT_GATES
 
         assert "cargo-test" in DEFAULT_GATES
         gate = DEFAULT_GATES["cargo-test"]
@@ -87,21 +87,21 @@ class TestStackFiltering:
     )
     def test_gate_applicability(self, gate_name, files, expected):
         from gate_runner import gate_applies_to
-        from project_config import DEFAULT_GATES
+        from default_gates import CATALOG_GATES as DEFAULT_GATES
 
         gate = {**DEFAULT_GATES[gate_name], "name": gate_name}
         assert gate_applies_to(gate, files) is expected
 
     def test_go_test_runs_for_go_files(self):
         from gate_runner import gate_applies_to
-        from project_config import DEFAULT_GATES
+        from default_gates import CATALOG_GATES as DEFAULT_GATES
 
         gate = {**DEFAULT_GATES["go-test"], "name": "go-test"}
         assert gate_applies_to(gate, ["main.go", "lib_test.go"]) is True
 
     def test_pytest_unaffected_by_new_gates(self):
         from gate_runner import gate_applies_to
-        from project_config import DEFAULT_GATES
+        from default_gates import CATALOG_GATES as DEFAULT_GATES
 
         gate = {**DEFAULT_GATES["pytest"], "name": "pytest"}
         assert gate_applies_to(gate, ["scripts/main.py"]) is True

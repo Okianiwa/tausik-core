@@ -14,7 +14,7 @@ import json
 import os
 from typing import Any
 
-from stack_registry import default_registry
+from stack_registry import catalog_registry
 from stack_schema import validate_decl
 
 _STACK_JSON = "stack.json"
@@ -34,12 +34,14 @@ def stack_show(name: str) -> dict[str, Any]:
     """Resolved stack decl (built-in deep-merged with user override).
 
     Raises KeyError when stack is unknown.
+
+    Catalog, not the project's active registry: inspecting the `go` stack from
+    a python project is a legitimate question, and answering "Unknown stack"
+    because it is not deployed here would trade a silent split for a loud lie.
     """
-    reg = default_registry()
+    reg = catalog_registry()
     if name not in reg.all_stacks():
-        raise KeyError(
-            f"Unknown stack: {name!r}. Available: {sorted(reg.all_stacks())}"
-        )
+        raise KeyError(f"Unknown stack: {name!r}. Available: {sorted(reg.all_stacks())}")
     return {
         "name": name,
         "source": reg.source_for(name),
@@ -141,7 +143,7 @@ def stack_scaffold(
     validate_slug(name)
     if extends_builtin is not None:
         validate_slug(extends_builtin)
-        reg = default_registry()
+        reg = catalog_registry()
         if extends_builtin not in reg.all_stacks():
             raise ValueError(
                 f"extends_builtin '{extends_builtin}' is not a known stack. "

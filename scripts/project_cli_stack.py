@@ -78,10 +78,14 @@ def _cmd_info(svc: ProjectService, stack: str) -> None:
 
 
 def _cmd_export(stack: str) -> None:
-    """Dump the resolved (built-in + user-merged) decl as JSON."""
-    from stack_registry import default_registry
+    """Dump the resolved (built-in + user-merged) decl as JSON.
 
-    reg = default_registry()
+    Catalog registry — exporting a stack is a question about what TAUSIK ships,
+    not about what this project deploys (see `stack_show`).
+    """
+    from stack_registry import catalog_registry
+
+    reg = catalog_registry()
     if stack not in reg.all_stacks():
         print(f"Unknown stack: {stack!r}. Available: {sorted(reg.all_stacks())}")
         return

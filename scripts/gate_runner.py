@@ -298,7 +298,11 @@ def read_files_manifest(path: str) -> list[str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run TAUSIK quality gates")
-    parser.add_argument("trigger", choices=["task-done", "commit", "review"])
+    # Choices track the triggers production actually fires. `verify` was
+    # missing even though the heavy gates hang off it (service_gates calls it
+    # programmatically), so heavy gates could not be debugged from the CLI at
+    # all; `review` was offered but fired for nothing.
+    parser.add_argument("trigger", choices=["task-done", "commit", "verify"])
     parser.add_argument("--files", nargs="*", default=[])
     parser.add_argument(
         "--files-from",

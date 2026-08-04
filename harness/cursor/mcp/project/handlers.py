@@ -1177,9 +1177,21 @@ def _handle_gate_toggle(name: str, enable: bool) -> str:
     if not re.match(r"^[a-z0-9][a-z0-9-]*$", name):
         return f"Invalid gate name '{name}': must be lowercase alphanumeric with hyphens."
     try:
-        from project_config import load_config, save_config
+        from project_config import DEFAULT_GATES, load_config, save_config
 
         cfg = load_config()
+        if enable:
+            # Same guard as ProjectService.gate_enable — this handler writes
+            # config directly instead of calling it, so the check has to be
+            # here too or MCP stays the open door to a dead `{"enabled": true}`.
+            from gate_enable_check import check_gate_enable
+            from stack_registry import catalog_registry
+
+            refusal = check_gate_enable(
+                name, DEFAULT_GATES, cfg.get("gates", {}), catalog_registry()
+            )
+            if refusal:
+                return f"Refused: {refusal}"
         cfg.setdefault("gates", {}).setdefault(name, {})["enabled"] = enable
         save_config(cfg)
         return f"Gate '{name}' {'enabled' if enable else 'disabled'}."

@@ -128,22 +128,16 @@ class GatesMixin:
         Threads optional `audit_check` / `session_check_duration` callbacks
         from the composing service (ProjectService) when available.
         """
-        # Annotated hand-off, here and in the three delegates below: the commit
-        # trigger judges staged files alone, so the absent gate_* modules type as
-        # Any and each delegate trips no-any-return. Stopgap for these four sites
-        # — task mypy-commit-slice-any-false-block owns the class.
-        errors: list[str] = check_qg0_start(
+        return check_qg0_start(
             slug,
             task,
             audit_check_fn=getattr(self, "audit_check", None),
             session_check_duration_fn=getattr(self, "session_check_duration", None),
         )
-        return errors
 
     def _verify_ac(self, slug: str, task: dict[str, Any], ac_verified: bool) -> list[str]:
         """QG-2 AC verification — delegates to gate_ac_check.verify_ac."""
-        errors: list[str] = verify_ac(slug, task, ac_verified)
-        return errors
+        return verify_ac(slug, task, ac_verified)
 
     def _verify_plan_complete(self, slug: str, task: dict[str, Any]) -> None:
         """Plan-complete check — delegates to gate_ac_check.verify_plan_complete."""
@@ -155,13 +149,11 @@ class GatesMixin:
         relevant_files: list[str] | None = None,
     ) -> str:
         """Tier auto-detect — delegates to gate_ac_check.determine_checklist_tier."""
-        tier: str = determine_checklist_tier(task, relevant_files)
-        return tier
+        return determine_checklist_tier(task, relevant_files)
 
     def _check_verification_checklist(self, slug: str, task: dict[str, Any]) -> str:
         """SENAR Rule 5 checklist — delegates to gate_ac_check.check_verification_checklist."""
-        report: str = check_verification_checklist(task)
-        return report
+        return check_verification_checklist(task)
 
     @staticmethod
     def _extract_files_from_gate_output(output: str) -> list[str]:

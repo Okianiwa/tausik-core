@@ -65,7 +65,25 @@ CLI: ВСЕГДА `.tausik/tausik <команда>`. НИКОГДА `python scri
 
 <!-- DYNAMIC:START -->
 ## Current State
-Session: none | Branch: fix/hook-tool-coverage | Version: 1.4.0
-Tasks: 68/89 done, 0 active, 1 blocked
+Session: #39 (active) | Branch: fix/hook-tool-coverage | Version: 1.4.0
+Tasks: 69/91 done, 0 active, 1 blocked
 Blocked: asynchronus-ci-annotations-lookup
+
+### Memory tail
+Decisions (5):
+- #64 Реестр гейтов — свойство ПРОЕКТА, а не места запуска кода: default_registry() резолвит builtin-стеки из каталога .claude
+- #63 Генератор doc-констант сам правит cross-file ссылки на число тестов, а не только constants.json
+- #62 Обстоятельства кэш-попадания пробрасываются необязательным колбэком cache_hit_fn, а не четвёртым элементом кортежа возвр
+- #61 Гейт, читающий область проверки из своего конфига, судит применимость по КОНФИГУ до запуска, а не по тексту своей ошибки
+- #60 Задачи по чужим проектам портфеля заводятся в базе ModLoader с пометкой «обслуживание портфеля», а не в базе того проект
+Conventions (5):
+- #129 Совет ремедиации проверяют исполнением текста, а не чтением глазами
+- #127 Вердикт гейта проверяют на РЕНДЕРЕ, а не на возвращаемой структуре
+- #122 Доказательство покрытия стража = вызовется (А) + отреагирует (Б); по отдельности каждое ничего не ст
+- #121 Страж покрывает инструмент только если пройдены ВСЕ ТРИ слоя фильтрации
+- #118 Тест, закрепляющий поведение, читать вместе с мотивировкой коммита — он мог заморозить деталь реализ
+Dead ends (3):
+- #101 Пивот consumer-pipeline: специализированный push (reusable ThreadLocal-предикат, inline pushableBy,
+- #100 Плотный per-section bbox-SoA массив для AABB-фильтра getEntities(AABB) БЕЗ разыменования Entity (исх
+- #99 Рычаг #2: срезать BlockCollisions.computeNext (~8.1% clustercensus@50k self-time) instr-swap-safe тр
 <!-- DYNAMIC:END -->

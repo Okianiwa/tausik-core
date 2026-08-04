@@ -132,9 +132,14 @@ def regenerate_mcp_stack_enums(lib_dir: str) -> int:
         scripts_dir = os.path.join(lib_dir, "scripts")
         if scripts_dir not in _sys.path:
             _sys.path.insert(0, scripts_dir)
-        from stack_registry import default_registry
+        from stack_registry import catalog_registry
 
-        names = sorted(default_registry().all_stacks())
+        # Catalog, not the project's active registry. This enum is the set of
+        # values MCP accepts for `--stack`, so scoping it to deployed stacks
+        # wrote `["python"]` into the harness sources of a python project and
+        # made `task add --stack java` fail over MCP while working from a
+        # terminal (task gates-registry-split-cli-vs-hook).
+        names = sorted(catalog_registry().all_stacks())
     except Exception:  # noqa: BLE001
         return 0
     if not names:

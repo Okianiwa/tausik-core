@@ -9,10 +9,14 @@ VALID_STORY_STATUSES = frozenset({"open", "active", "done"})
 VALID_EPIC_STATUSES = frozenset({"active", "done", "archived"})
 
 # Built-in stacks. Single source of truth lives in `stacks/<name>/stack.json`
-# and is loaded by `stack_registry.default_registry()`. The hardcoded fallback
-# below is used ONLY when the registry can't load (missing dir, IO error,
-# import-time crash) — it keeps `from project_types import DEFAULT_STACKS`
-# safe so the rest of the framework boots.
+# and is loaded by `stack_registry.catalog_registry()`. The CATALOG, not the
+# project's active registry: this set validates `--stack` on task creation, and
+# a python project must still be able to file a java task (this repo does — the
+# async-platform epic). Gate selection is the other question and uses
+# `default_registry()`. The hardcoded fallback below is used ONLY when the
+# registry can't load (missing dir, IO error, import-time crash) — it keeps
+# `from project_types import DEFAULT_STACKS` safe so the rest of the framework
+# boots.
 #
 # Users extend this set via .tausik/config.json under the top-level
 # "custom_stacks" array — see get_valid_stacks() below.
@@ -56,9 +60,9 @@ def _load_default_stacks() -> frozenset[str]:
     `from project_types import DEFAULT_STACKS` never crashes module load.
     """
     try:
-        from stack_registry import default_registry
+        from stack_registry import catalog_registry
 
-        names = default_registry().all_stacks()
+        names = catalog_registry().all_stacks()
         if not names:
             return _FALLBACK_STACKS
         return frozenset(names)
@@ -101,11 +105,7 @@ def get_valid_stacks(cfg: dict | None = None) -> frozenset[str]:
 
 VALID_COMPLEXITIES = frozenset({"simple", "medium", "complex"})
 VALID_TIERS = frozenset({"trivial", "light", "moderate", "substantial", "deep"})
-VALID_MEMORY_TYPES = frozenset(
-    {"pattern", "gotcha", "convention", "context", "dead_end"}
-)
-VALID_EDGE_RELATIONS = frozenset(
-    {"supersedes", "caused_by", "relates_to", "contradicts"}
-)
+VALID_MEMORY_TYPES = frozenset({"pattern", "gotcha", "convention", "context", "dead_end"})
+VALID_EDGE_RELATIONS = frozenset({"supersedes", "caused_by", "relates_to", "contradicts"})
 VALID_NODE_TYPES = frozenset({"memory", "decision"})
 COMPLEXITY_SP = {"simple": 1, "medium": 3, "complex": 8}

@@ -87,9 +87,15 @@
                 "severity": { "type": "string", "enum": ["warn", "block"] },
                 "trigger": {
                   "type": "array",
-                  "items": { "type": "string", "enum": ["task-done", "verify", "commit", "review"] }
+                  "items": { "type": "string", "enum": ["task-done", "verify", "commit"] }
                 },
                 "command": { "type": ["string", "null"] },
+                "trigger_args": {
+                  "type": "object",
+                  "description": "Extra arguments appended to `command` when the gate runs on that trigger — for a check that is sound on one trigger and not on another (mypy's no-any-return is unsound on the commit slice).",
+                  "propertyNames": { "enum": ["task-done", "verify", "commit"] },
+                  "additionalProperties": { "type": "string" }
+                },
                 "description": { "type": "string" },
                 "file_extensions": { "type": "array", "items": { "type": "string" } },
                 "stacks": { "type": "array", "items": { "type": "string" } },

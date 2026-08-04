@@ -225,7 +225,12 @@ class ProjectService(
         """Return per-stack gate inventory + honest gap notice."""
         from difflib import get_close_matches
 
-        from project_config import DEFAULT_GATES, load_config, load_gates
+        # CATALOG_GATES: `stack info go` describes the go stack as TAUSIK ships
+        # it. Answering from the active registry would report "no gates" for
+        # every stack this project does not deploy, which reads as a gap in the
+        # framework rather than an absence in the project.
+        from default_gates import CATALOG_GATES as DEFAULT_GATES
+        from project_config import load_config, load_gates
         from project_types import get_valid_stacks
 
         valid = get_valid_stacks(load_config())
@@ -255,7 +260,10 @@ class ProjectService(
 
     def stack_list(self) -> list[dict[str, Any]]:
         """List all known stacks with applicable gate count."""
-        from project_config import DEFAULT_GATES, load_config
+        # Catalog for the same reason as `stack_info` — the list spans every
+        # known stack, so the count beside each must describe that stack.
+        from default_gates import CATALOG_GATES as DEFAULT_GATES
+        from project_config import load_config
         from project_types import DEFAULT_STACKS, get_valid_stacks
 
         valid = get_valid_stacks(load_config())
@@ -327,9 +335,21 @@ class ProjectService(
 
     @staticmethod
     def gate_enable(name: str) -> str:
-        from project_config import load_config, save_config
+        """Enable a gate, refusing names that would store a dead entry.
+
+        Raises ValueError rather than writing `{"enabled": true}` for a gate
+        the project cannot run: reporting success for an entry that fires on no
+        trigger is the decorative-check failure this framework exists to catch.
+        """
+        from gate_enable_check import check_gate_enable
+        from project_config import DEFAULT_GATES, load_config, save_config
+        from stack_registry import catalog_registry
 
         cfg = load_config()
+        refusal = check_gate_enable(name, DEFAULT_GATES, cfg.get("gates", {}), catalog_registry())
+        if refusal:
+            raise ValueError(refusal)
+
         cfg.setdefault("gates", {}).setdefault(name, {})["enabled"] = True
         save_config(cfg)
         return f"Gate '{name}' enabled."

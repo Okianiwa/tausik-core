@@ -51,7 +51,9 @@ Each `stack.json` follows `stacks/_schema.json`. `guide.md` is the per-stack hum
 
 2. (Optional) Add `stacks/<name>/guide.md` with sections: `Testing`, `Review Checklist`, `Conventions`, `Common Pitfalls`. The skills-maturity test asserts these are present.
 
-3. (Optional) Declare gates in the `gates` field — for example, an RSpec gate scoped to ruby. The gate config follows `default_gates.UNIVERSAL_GATES` shape: `enabled`, `severity`, `trigger`, `command`, `description`, `timeout`, `stacks`.
+3. (Optional) Declare gates in the `gates` field — for example, an RSpec gate scoped to ruby. The gate config follows `default_gates.UNIVERSAL_GATES` shape: `enabled`, `severity`, `trigger`, `command`, `description`, `timeout`, `stacks`, `trigger_args`.
+
+   `trigger_args` is `{trigger: extra arguments}`, appended to `command` when the gate runs on that trigger. Use it when a check is sound on one trigger and not on another: mypy's `no-any-return` judges a slice of staged files only on `commit`, where an absent neighbour degrades to `Any`, so it is waived there and kept on `task-done`. The arguments go through the same security check as `command` (no shell operators) — and with the same reach: it applies to gates that are not built-ins. An override of a built-in gate from `.tausik/config.json` is not validated at all (known defect, task `gate-override-skips-command-validation`).
 
 4. Run `python bootstrap/bootstrap.py --no-detect` to refresh `.claude/stacks/`, `_STACKS_ENUM` in MCP `tools.py`, and the rest of the consumers.
 

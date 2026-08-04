@@ -53,7 +53,9 @@ stacks/
 
 2. (Опционально) Добавьте `stacks/<name>/guide.md` с секциями: `Testing`, `Review Checklist`, `Conventions`, `Common Pitfalls`. Тест skills-maturity проверяет их наличие.
 
-3. (Опционально) Объявите gates в поле `gates` — например, RSpec gate, scoped на ruby. Конфиг gate соответствует форме `default_gates.UNIVERSAL_GATES`: `enabled`, `severity`, `trigger`, `command`, `description`, `timeout`, `stacks`.
+3. (Опционально) Объявите gates в поле `gates` — например, RSpec gate, scoped на ruby. Конфиг gate соответствует форме `default_gates.UNIVERSAL_GATES`: `enabled`, `severity`, `trigger`, `command`, `description`, `timeout`, `stacks`, `trigger_args`.
+
+   `trigger_args` — `{триггер: доп. аргументы}`, дописываются к `command`, когда гейт запускается на этом триггере. Нужен, когда проверка достоверна на одном триггере и недостоверна на другом: `no-any-return` у mypy на `commit` судит срез из одних застейдженных файлов, где отсутствующий сосед деградирует до `Any`, поэтому там он отключён, а на `task-done` работает. Аргументы проходят ту же проверку безопасности, что и `command` (шелл-операторы запрещены) — и ровно с тем же охватом: она применяется к гейтам, которых нет среди встроенных. Override встроенного гейта из `.tausik/config.json` не валидируется вовсе (известный дефект, задача `gate-override-skips-command-validation`).
 
 4. Запустите `python bootstrap/bootstrap.py --no-detect`, чтобы обновить `.claude/stacks/`, `_STACKS_ENUM` в MCP `tools.py` и остальных потребителей.
 

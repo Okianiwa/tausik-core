@@ -22,7 +22,7 @@ def svc(tmp_path):
 
 class TestRegistration:
     def test_phpunit_registered(self):
-        from project_config import DEFAULT_GATES
+        from default_gates import CATALOG_GATES as DEFAULT_GATES
 
         gate = DEFAULT_GATES["phpunit"]
         assert "php" in gate["stacks"]
@@ -32,7 +32,7 @@ class TestRegistration:
         assert gate["severity"] == "block"
 
     def test_js_test_registered(self):
-        from project_config import DEFAULT_GATES
+        from default_gates import CATALOG_GATES as DEFAULT_GATES
 
         gate = DEFAULT_GATES["js-test"]
         for s in ("javascript", "typescript", "react", "next", "vue", "nuxt", "svelte"):
@@ -48,7 +48,7 @@ class TestRegistration:
             assert "js-test" in STACK_GATE_MAP.get(s, [])
 
     def test_descriptions_mention_override(self):
-        from project_config import DEFAULT_GATES
+        from default_gates import CATALOG_GATES as DEFAULT_GATES
 
         assert "Override" in DEFAULT_GATES["phpunit"]["description"]
         assert "Override" in DEFAULT_GATES["js-test"]["description"]
@@ -81,6 +81,6 @@ class TestStackFiltering:
     )
     def test_gate_applicability(self, gate, files, expected):
         from gate_runner import gate_applies_to
-        from project_config import DEFAULT_GATES
+        from default_gates import CATALOG_GATES as DEFAULT_GATES
 
         assert gate_applies_to(DEFAULT_GATES[gate], files) is expected

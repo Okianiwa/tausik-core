@@ -49,7 +49,7 @@ class TestRegistration:
         ],
     )
     def test_gate_registered(self, gate_name, stack):
-        from project_config import DEFAULT_GATES
+        from default_gates import CATALOG_GATES as DEFAULT_GATES
 
         gate = DEFAULT_GATES[gate_name]
         assert stack in gate["stacks"]
@@ -66,7 +66,7 @@ class TestRegistration:
 
     def test_descriptions_state_lint_only(self):
         """Honest scope: each IaC gate must call out 'NOT policy-as-code'."""
-        from project_config import DEFAULT_GATES
+        from default_gates import CATALOG_GATES as DEFAULT_GATES
 
         for name in ("ansible-lint", "terraform-validate", "helm-lint", "kubeval"):
             desc = DEFAULT_GATES[name]["description"].lower()
@@ -172,7 +172,7 @@ class TestCrossStackFiltering:
     )
     def test_cross_stack_applicability(self, gate_name, files, expected):
         from gate_runner import gate_applies_to
-        from project_config import DEFAULT_GATES
+        from default_gates import CATALOG_GATES as DEFAULT_GATES
 
         gate = {**DEFAULT_GATES[gate_name], "name": gate_name}
         assert gate_applies_to(gate, files) is expected

@@ -26,6 +26,11 @@ import logging
 import os
 from typing import Any
 
+from stack_registry_paths import (
+    active_builtin_dir,
+    catalog_stacks_dir,
+    user_stacks_dir,
+)
 from stack_schema import validate_decl
 
 logger = logging.getLogger("tausik.stack_registry")
@@ -170,9 +175,7 @@ class StackRegistry:
 
     # --- Internals --------------------------------------------------------
 
-    def _scan_dir(
-        self, root: str | os.PathLike[str], *, layer: str
-    ) -> dict[str, dict[str, Any]]:
+    def _scan_dir(self, root: str | os.PathLike[str], *, layer: str) -> dict[str, dict[str, Any]]:
         result: dict[str, dict[str, Any]] = {}
         root_str = str(root)
         if not os.path.isdir(root_str):
@@ -219,9 +222,7 @@ class StackRegistry:
         """Merge built-in + user layers. Cached until next load_*."""
         if self._resolved is not None:
             return self._resolved
-        merged: dict[str, dict[str, Any]] = {
-            n: dict(d) for n, d in self._builtin.items()
-        }
+        merged: dict[str, dict[str, Any]] = {n: dict(d) for n, d in self._builtin.items()}
         for name, user_decl in self._user.items():
             extends = user_decl.get("extends")
             if extends:
@@ -292,27 +293,53 @@ class StackRegistry:
         return result
 
 
-# --- Module-level singleton -------------------------------------------------
+# --- Module-level singletons ------------------------------------------------
 
+# Two different questions, previously answered by one function:
+#   * "which stacks EXIST?"          -> catalog_registry()  (ships with TAUSIK)
+#   * "which stacks does THIS PROJECT run?" -> default_registry() (its deploy)
+# Path resolution for both lives in `stack_registry_paths`; see its docstring
+# for why deriving them from `__file__` split the gate registry in two
+# (task gates-registry-split-cli-vs-hook, decision #64).
+
+_catalog_registry: StackRegistry | None = None
 _default_registry: StackRegistry | None = None
 
 
-def default_registry() -> StackRegistry:
-    """Return the lazy-initialized module-level registry.
+def catalog_registry() -> StackRegistry:
+    """Every stack TAUSIK ships — the answer to "does stack X exist?".
 
-    Loads built-ins from `<repo>/stacks/` (resolved from this file's location)
-    and user overrides from `<cwd>/.tausik/stacks/` if present. Use
+    Used by `stack show/export/scaffold --extends-builtin` and by tests that
+    assert on catalog content: a python project must still be able to inspect
+    the `go` stack, and a test of the shipped catalog must not depend on which
+    stacks the developer's own project happens to deploy.
+
+    Carries the user layer too — "which stacks can I inspect" includes the ones
+    the project defines itself, and `stack show` reports `is_user_overridden`
+    off this registry. Only the built-in layer differs from `default_registry`.
+    """
+    global _catalog_registry
+    if _catalog_registry is None:
+        reg = StackRegistry()
+        reg.load_builtin(catalog_stacks_dir())
+        reg.load_user(user_stacks_dir())
+        _catalog_registry = reg
+    return _catalog_registry
+
+
+def default_registry() -> StackRegistry:
+    """Stacks ACTIVE in the current project — the registry gates run against.
+
+    Built-ins come from the project's deploy dir (`.claude/stacks/` and
+    friends), user overrides from `<root>/.tausik/stacks/`. Both layers now
+    resolve from the project rather than from this file's location, so the
+    registry no longer depends on which copy of the code is executing. Use
     `default_registry().reload(...)` from tests to point at fixtures.
     """
     global _default_registry
     if _default_registry is None:
         reg = StackRegistry()
-        # `<repo>/stacks/` lives one level up from `scripts/`.
-        scripts_dir = os.path.dirname(os.path.abspath(__file__))
-        repo_root = os.path.dirname(scripts_dir)
-        builtin_dir = os.path.join(repo_root, "stacks")
-        reg.load_builtin(builtin_dir)
-        user_dir = os.path.join(os.getcwd(), ".tausik", "stacks")
-        reg.load_user(user_dir)
+        reg.load_builtin(active_builtin_dir())
+        reg.load_user(user_stacks_dir())
         _default_registry = reg
     return _default_registry

@@ -113,9 +113,13 @@ def _load_stack_signatures() -> dict[str, list[tuple[str, str]]]:
         )
         if _scripts not in _sys.path:
             _sys.path.insert(0, _scripts)
-        from stack_registry import default_registry
+        from stack_registry import catalog_registry
 
-        reg = default_registry()
+        # Catalog, not the active registry: these signatures are what DETECTS a
+        # stack in the project. Scoping them to already-deployed stacks makes
+        # detection circular — a project that adds Terraform files could never
+        # be found to use Terraform, because Terraform was not deployed yet.
+        reg = catalog_registry()
         out: dict[str, list[tuple[str, str]]] = {}
         for name in reg.all_stacks():
             entries: list[tuple[str, str]] = []

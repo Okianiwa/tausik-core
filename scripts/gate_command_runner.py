@@ -43,8 +43,34 @@ _NOTHING_TO_CHECK_SENTINEL = "__TAUSIK_NOTHING_TO_CHECK__"
 _SLICE_IS_THE_TREE = ("commit",)
 
 
+def _apply_trigger_args(cmd: str, gate: dict, trigger: str | None) -> str:
+    """Append the extra arguments a gate declares for THIS trigger, if any.
+
+    A checker can be sound on one trigger and structurally unsound on another,
+    and that difference belongs to the trigger rather than to the command
+    string — which is shared by every trigger the gate lists. mypy is the
+    measured case: on `commit` it judges a tree of staged files only, so every
+    unstaged neighbour degrades to Any and `no-any-return` fires on code that
+    is correct (see default_gates.py for the numbers).
+
+    Ignores a non-str value instead of failing the run: a malformed override
+    is a config problem, reported by `stack_schema` / `validate_custom_gate`,
+    and turning it into a gate error here would block a commit for a reason
+    that has nothing to do with the staged code.
+    """
+    if not trigger:
+        return cmd
+    extra = (gate.get("trigger_args") or {}).get(trigger)
+    if not isinstance(extra, str) or not extra.strip():
+        return cmd
+    return f"{cmd} {extra.strip()}"
+
+
 def run_command_gate(gate: dict, files: list[str], trigger: str | None = None) -> tuple[bool, str]:
     """Run a command-based gate. Substitutes {files} / {test_files_for_files}.
+
+    Appends `trigger_args[trigger]` when the gate declares one — see
+    `_apply_trigger_args`.
 
     Special return: (True, _SCOPED_SKIP_SENTINEL) when {test_files_for_files}
     is in cmd and no test files map from a non-empty relevant_files. The
@@ -79,6 +105,8 @@ def run_command_gate(gate: dict, files: list[str], trigger: str | None = None) -
         in_scope = slice_intersects_config_scope(gate, files)
         if in_scope is False:
             return True, _NOTHING_TO_CHECK_SENTINEL
+
+    cmd = _apply_trigger_args(cmd, gate, trigger)
 
     if "{test_files_for_files}" in cmd:
         test_files = resolve_test_files_for_relevant(files)

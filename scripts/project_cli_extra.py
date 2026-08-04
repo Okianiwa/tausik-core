@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from typing import Any
 
 from project_service import ProjectService
@@ -193,7 +194,8 @@ def cmd_update_claudemd(svc: ProjectService, args: Any) -> None:
         r = subprocess.run(
             ["git", "branch", "--show-current"],
             capture_output=True,
-            text=True, encoding="utf-8",
+            text=True,
+            encoding="utf-8",
             timeout=5,
             stdin=subprocess.DEVNULL,
         )
@@ -351,7 +353,12 @@ def cmd_gates(svc: ProjectService, args: Any) -> None:
                 print(f"\n  QG-0 Readiness: all {planning} planning tasks have goal + AC")
 
     elif c == "enable":
-        print(svc.gate_enable(args.name))
+        # Refusal carries the remedy; surface it as an error, not a traceback.
+        try:
+            print(svc.gate_enable(args.name))
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            sys.exit(1)
     elif c == "disable":
         print(svc.gate_disable(args.name))
 
