@@ -1087,3 +1087,91 @@ class TestPytestGateScopeSubstitution:
         """Regression: default pytest gate command uses the new substitution token."""
         cmd = DEFAULT_GATES["pytest"]["command"]
         assert "{test_files_for_files}" in cmd
+
+
+class TestGatesStatusStackLabels:
+    """gates-status-mislabels-multistack-gate: the RENDER, not the registry.
+
+    The multi-stack pytest gate (stacks: python/fastapi/django/flask) used to
+    print under «[django]» in a pure-python project: the renderer walked
+    sorted(stack_groups) and the dedup hid the gate from every later claimant.
+    """
+
+    @staticmethod
+    def _svc_stub(stack_groups, active_stacks, gates=None):
+        class _Svc:
+            def gates_status(self):
+                return {
+                    "gates": gates
+                    or {
+                        "pytest": {
+                            "enabled": True,
+                            "severity": "block",
+                            "trigger": ["verify"],
+                            "description": "Run pytest",
+                            "command": "pytest -x -q",
+                        }
+                    },
+                    "stack_groups": stack_groups,
+                    "active_stacks": active_stacks,
+                    "qg0": {},
+                }
+
+        return _Svc()
+
+    @staticmethod
+    def _render(svc):
+        from types import SimpleNamespace
+
+        from project_cli_extra import cmd_gates
+
+        import io
+        import contextlib
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmd_gates(svc, SimpleNamespace(gates_cmd="status"))
+        return buf.getvalue()
+
+    def test_multistack_gate_renders_under_active_stack(self):
+        groups = {
+            "general": [],
+            "django": ["pytest"],
+            "fastapi": ["pytest"],
+            "flask": ["pytest"],
+            "python": ["pytest"],
+        }
+        out = self._render(self._svc_stub(groups, active_stacks=["python"]))
+        assert "[python] (detected)" in out
+        assert "[django]" not in out
+        assert "pytest" in out
+
+    def test_gate_without_active_stack_lists_all_claimants(self):
+        groups = {"general": [], "django": ["pytest"], "flask": ["pytest"]}
+        out = self._render(self._svc_stub(groups, active_stacks=[]))
+        assert "[django/flask]" in out  # честный ярлык вместо выдуманного владельца
+        assert "pytest" in out
+        assert "[django]\n" not in out
+
+    def test_empty_active_stacks_resolve_does_not_crash(self):
+        groups = {"general": [], "python": ["pytest"]}
+        out = self._render(self._svc_stub(groups, active_stacks=[]))
+        assert "pytest" in out
+        assert "[python]" in out  # единственный объявленный стек и есть ярлык
+
+    def test_service_falls_back_to_deployed_registry(self, monkeypatch):
+        import project_service as ps
+
+        class _Reg:
+            def all_stacks(self):
+                return frozenset({"python"})
+
+        import stack_registry
+
+        monkeypatch.setattr(stack_registry, "default_registry", lambda: _Reg())
+        import project_config
+
+        monkeypatch.setattr(project_config, "load_config", lambda: {"bootstrap": {"stacks": None}})
+        svc = ps.ProjectService.__new__(ps.ProjectService)
+        data = svc.gates_status()
+        assert data["active_stacks"] == ["python"]

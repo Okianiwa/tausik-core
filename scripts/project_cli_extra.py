@@ -276,15 +276,32 @@ def cmd_gates(svc: ProjectService, args: Any) -> None:
                 continue
             shown.add(name)
             _print_gate(name, gates[name], "  ", verbose)
-        for stack in sorted(stack_groups):
-            if stack == "general":
-                continue
+        # Active stacks claim their gates first: a multi-stack gate (pytest is
+        # declared for python/fastapi/django/flask) renders under the stack
+        # THIS project runs, not under the alphabetically first claimant.
+        for stack in sorted(s for s in stack_groups if s != "general" and s in active_stacks):
             stack_gates = [g for g in stack_groups[stack] if g in gates and g not in shown]
             if not stack_gates:
                 continue
-            active = stack in active_stacks
-            print(f"  [{stack}]" + (" (detected)" if active else ""))
+            print(f"  [{stack}] (detected)")
             for name in stack_gates:
+                shown.add(name)
+                _print_gate(name, gates[name], "    ", verbose)
+        # Leftovers belong to no active stack — name every declared stack
+        # instead of inventing a single owner.
+        leftover: dict[str, list[str]] = {}
+        for stack in sorted(stack_groups):
+            if stack == "general":
+                continue
+            for g in stack_groups[stack]:
+                if g in gates and g not in shown:
+                    leftover.setdefault(g, []).append(stack)
+        by_label: dict[str, list[str]] = {}
+        for g, g_stacks in leftover.items():
+            by_label.setdefault("/".join(sorted(g_stacks)), []).append(g)
+        for label in sorted(by_label):
+            print(f"  [{label}]")
+            for name in by_label[label]:
                 shown.add(name)
                 _print_gate(name, gates[name], "    ", verbose)
         if verbose:

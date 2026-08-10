@@ -291,7 +291,18 @@ class ProjectService(
 
         gates = load_gates()
         cfg = load_config()
-        active_stacks = cfg.get("bootstrap", {}).get("stacks", [])
+        active_stacks = cfg.get("bootstrap", {}).get("stacks", []) or []
+        if not active_stacks:
+            # cfg may predate stack tracking (stacks=None). The deploy IS the
+            # project's stack list (decision #64) — resolve from it, so the
+            # renderer can group a multi-stack gate under a stack the project
+            # actually runs instead of an arbitrary claimant.
+            try:
+                from stack_registry import default_registry
+
+                active_stacks = sorted(default_registry().all_stacks())
+            except Exception:
+                active_stacks = []
 
         # Group gates by stack
         stack_groups: dict[str, list[str]] = {"general": []}
