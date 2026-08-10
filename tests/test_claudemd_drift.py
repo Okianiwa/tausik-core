@@ -217,3 +217,140 @@ def test_memory_tail_only_decisions_no_conventions_or_deadends():
     assert "Solo decision" in text
     assert "Conventions" not in text
     assert "Dead ends" not in text
+
+
+# --- MCP path shares the builder (mcp-update-claudemd-drops-memory-tail) ----
+#
+# The MCP handler used to rebuild the dynamic block with its own copy of this
+# logic, without build_compact_memory_tail — so every MCP call silently ERASED
+# the memory tail the CLI had written. These tests pin the unified path.
+
+_HANDLERS_SKILL_PATH = REPO / "harness" / "claude" / "mcp" / "project" / "handlers_skill.py"
+
+
+def _load_handlers_skill():
+    """Load handlers_skill.py under a unique module name.
+
+    Same pattern as test_brain_mcp_handlers — avoids clashing with other
+    harness modules when several tests touch mcp files in one session.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "tausik_project_handlers_skill", str(_HANDLERS_SKILL_PATH)
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class _TailSvcStub:
+    """svc with a memory-bearing backend — enough for build_dynamic_content."""
+
+    def __init__(self, be):
+        self.be = be
+
+    def task_list(self):
+        return []
+
+    def session_current(self):
+        return None
+
+
+_DYNAMIC_WITH_TAIL = textwrap.dedent(
+    """\
+    # CLAUDE.md
+
+    static body
+
+    <!-- DYNAMIC:START -->
+    ## Current State
+    Session: #1 (active) | Branch: main | Version: 1.0
+    Tasks: 0/0 done, 0 active, 0 blocked
+
+    ### Memory tail
+    Decisions (1):
+    - #1 Use SQLite for local
+    <!-- DYNAMIC:END -->
+    """
+)
+
+
+def test_mcp_update_claudemd_preserves_memory_tail(temp_project):
+    """The defect itself: MCP path must not erase an already-written tail."""
+    (temp_project / "CLAUDE.md").write_text(_DYNAMIC_WITH_TAIL, encoding="utf-8")
+
+    handlers = _load_handlers_skill()
+    be = _BeStub(decisions=[{"id": 1, "decision": "Use SQLite for local"}])
+    msg = handlers.handle_update_claudemd(_TailSvcStub(be))
+
+    text = (temp_project / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "updated" in msg
+    assert "### Memory tail" in text, "MCP update erased the memory tail"
+    assert "Use SQLite for local" in text
+
+
+def test_cli_and_mcp_use_the_same_builder(temp_project, monkeypatch):
+    """Both entry points must delegate to service_claudemd.build_dynamic_content."""
+    from types import SimpleNamespace
+
+    import service_claudemd
+    from project_cli_extra import cmd_update_claudemd
+
+    calls = []
+
+    def _sentinel(svc, branch, version, warnings=None):
+        calls.append((branch, version))
+        return "## Current State\nSENTINEL-BUILDER-OUTPUT"
+
+    monkeypatch.setattr(service_claudemd, "build_dynamic_content", _sentinel)
+
+    md = "# X\n<!-- DYNAMIC:START -->\nold\n<!-- DYNAMIC:END -->\n"
+
+    (temp_project / "CLAUDE.md").write_text(md, encoding="utf-8")
+    cmd_update_claudemd(
+        _TailSvcStub(_BeStub()), SimpleNamespace(claudemd="CLAUDE.md", dry_run=False)
+    )
+    assert "SENTINEL-BUILDER-OUTPUT" in (temp_project / "CLAUDE.md").read_text(encoding="utf-8")
+
+    (temp_project / "CLAUDE.md").write_text(md, encoding="utf-8")
+    handlers = _load_handlers_skill()
+    handlers.handle_update_claudemd(_TailSvcStub(_BeStub()))
+    assert "SENTINEL-BUILDER-OUTPUT" in (temp_project / "CLAUDE.md").read_text(encoding="utf-8")
+
+    assert len(calls) == 2, "CLI and MCP must both call the shared builder"
+
+
+def test_build_dynamic_content_empty_memory_no_tail_stub():
+    """Empty memory: no '### Memory tail' stub section, no crash."""
+    from service_claudemd import build_dynamic_content
+
+    content = build_dynamic_content(_TailSvcStub(_BeStub()), "main", "1.0")
+    assert "## Current State" in content
+    assert "### Memory tail" not in content
+
+
+def test_build_dynamic_content_tail_error_reported_to_warnings():
+    """Backend failure degrades to no-tail output but is reported, not swallowed."""
+    from service_claudemd import build_dynamic_content
+
+    warnings: list[str] = []
+    content = build_dynamic_content(
+        _TailSvcStub(_BeStub(raise_on=True)), "main", "1.0", warnings=warnings
+    )
+    assert "## Current State" in content
+    assert warnings and "memory tail unavailable" in warnings[0]
+
+
+def test_mcp_update_claudemd_tail_failure_updates_file_and_warns(temp_project):
+    """Tail failure: dynamic section still refreshed, degradation voiced in the reply."""
+    (temp_project / "CLAUDE.md").write_text(_DYNAMIC_WITH_TAIL, encoding="utf-8")
+
+    handlers = _load_handlers_skill()
+    msg = handlers.handle_update_claudemd(_TailSvcStub(_BeStub(raise_on=True)))
+
+    text = (temp_project / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "updated" in msg
+    assert "memory tail unavailable" in msg, "degradation must be voiced, not silent"
+    assert "## Current State" in text

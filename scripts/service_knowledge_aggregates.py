@@ -16,20 +16,24 @@ _FILE_PATTERN = re.compile(
 )
 
 
-def build_compact_memory_tail(be: Any) -> list[str]:
+def build_compact_memory_tail(be: Any, errors: list[str] | None = None) -> list[str]:
     """One-line-per-item memory recap for CLAUDE.md Current State.
 
     Used by `tausik update-claudemd` to embed the latest decisions /
     conventions / dead ends inside the dynamic block, so /start no longer
     needs a separate `tausik_memory_block` re-injection call. Empty DB
     (or any backend exception) → return [] and the caller omits the
-    subsection entirely.
+    subsection entirely; the exception is additionally reported into
+    `errors` so callers can voice the degradation instead of passing it
+    off as an empty DB.
     """
     try:
         decisions = be.decision_list(5) or []
         conventions = be.memory_list("convention", 5) or []
         deadends = be.memory_list("dead_end", 3) or []
-    except Exception:
+    except Exception as e:
+        if errors is not None:
+            errors.append(f"memory tail unavailable: {e}")
         return []
 
     if not decisions and not conventions and not deadends:

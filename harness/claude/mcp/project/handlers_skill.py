@@ -209,41 +209,21 @@ def handle_skill_repo_list() -> str:
 
 
 def handle_update_claudemd(svc) -> str:
+    # Content assembly is shared with the CLI path (service_claudemd) — an MCP-only
+    # copy once silently erased the memory tail (mcp-update-claudemd-drops-memory-tail).
+    from service_claudemd import (
+        build_dynamic_content,
+        replace_dynamic_section,
+        resolve_branch,
+        resolve_version,
+    )
+
     project_dir = _project_dir()
 
-    tasks = svc.task_list()
-    session = svc.session_current()
-
-    active = [t for t in tasks if t["status"] == "active"]
-    blocked = [t for t in tasks if t["status"] == "blocked"]
-    done_count = sum(1 for t in tasks if t["status"] == "done")
-    total = len(tasks)
-
-    try:
-        head = os.path.join(project_dir, ".git", "HEAD")
-        with open(head, encoding="utf-8") as f:
-            ref = f.read().strip()
-        branch = ref.replace("ref: refs/heads/", "") if ref.startswith("ref:") else ref[:8]
-    except Exception:
-        branch = "unknown"
-
-    try:
-        from tausik_version import __version__ as version
-    except Exception:
-        version = "unknown"
-
-    session_info = f"#{session['id']} (active)" if session else "none"
-    lines = [
-        "## Current State",
-        f"Session: {session_info} | Branch: {branch} | Version: {version}",
-        f"Tasks: {done_count}/{total} done, {len(active)} active, {len(blocked)} blocked",
-    ]
-    if active:
-        lines.append(f"Active: {', '.join(t['slug'] for t in active)}")
-    if blocked:
-        lines.append(f"Blocked: {', '.join(t['slug'] for t in blocked)}")
-
-    dynamic_content = "\n".join(lines)
+    tail_warnings: list[str] = []
+    dynamic_content = build_dynamic_content(
+        svc, resolve_branch(project_dir), resolve_version(), warnings=tail_warnings
+    )
 
     # Find and update CLAUDE.md
     claudemd = None
@@ -271,25 +251,16 @@ def handle_update_claudemd(svc) -> str:
     with open(claudemd, encoding="utf-8") as f:
         content = f.read()
 
-    marker_start_prefix = "<!-- DYNAMIC:START"
-    marker_end = "<!-- DYNAMIC:END -->"
-
-    start_idx = content.find(marker_start_prefix)
-    if start_idx == -1:
+    new_content = replace_dynamic_section(content, dynamic_content)
+    if new_content is None:
         return "Warning: <!-- DYNAMIC:START --> marker not found in CLAUDE.md"
-    start_line_end = content.index("\n", start_idx) if "\n" in content[start_idx:] else len(content)
-
-    if marker_end in content:
-        before = content[:start_line_end]
-        after = content[content.index(marker_end) :]
-        content = f"{before}\n{dynamic_content}\n{after}"
-    else:
-        before = content[:start_line_end]
-        content = f"{before}\n{dynamic_content}\n{marker_end}\n"
 
     with open(claudemd, "w", encoding="utf-8") as f:
-        f.write(content)
-    return f"CLAUDE.md updated ({claudemd})."
+        f.write(new_content)
+    result = f"CLAUDE.md updated ({claudemd})."
+    for w in tail_warnings:
+        result += f"\nWarning: {w}"
+    return result
 
 
 def handle_list(items: list, fmt, empty_msg: str = "None.") -> str:
