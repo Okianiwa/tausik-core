@@ -66,7 +66,8 @@ CLI: ВСЕГДА `.tausik/tausik <команда>`. НИКОГДА `python scri
 <!-- DYNAMIC:START -->
 ## Current State
 Session: #42 (active) | Branch: fix/hook-tool-coverage | Version: 1.4.0
-Tasks: 74/99 done, 0 active, 1 blocked
+Tasks: 74/99 done, 1 active, 1 blocked
+Active: mcp-update-claudemd-drops-memory-tail
 Blocked: asynchronus-ci-annotations-lookup
 
 ### Memory tail
