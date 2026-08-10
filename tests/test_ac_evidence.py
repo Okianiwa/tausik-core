@@ -109,3 +109,77 @@ def test_summary_shape():
     assert "AC coverage" in s
     assert "gaps" in s
     assert "negative scenario" in s
+
+
+# --- inline "AC verified: 1. … ✓ 2. …" journal format ------------------
+# (ac-evidence-parser-misses-checkmark-format): a real closing produced
+# "0/1 criteria with explicit evidence" although the journal held a full
+# per-criterion breakdown — the whole breakdown lived in ONE journal line
+# and the AC itself was one line with inline numbering.
+
+# Faithful excerpt of the session #42 journal line that measured the defect.
+_REAL_JOURNAL_LINE = (
+    "[2026-08-10T20:56:20Z] AC verified: "
+    "1. Единая реализация ✓ — оба пути зовут service_claudemd.build_dynamic_content "
+    "(тест test_cli_and_mcp_use_the_same_builder ловит через sentinel-monkeypatch: "
+    "2 вызова, контент в файле на обоих путях). "
+    "2. Тест на стирание ✓ — test_mcp_update_claudemd_preserves_memory_tail; "
+    "замер на до-фиксовом коде (git show HEAD): OLD=TAIL ERASED, NEW=TAIL PRESERVED. "
+    "3. Живой рендер ✓ — развёрнутая копия в свежем интерпретаторе записала "
+    "D:/ModLoader/CLAUDE.md С секцией '### Memory tail' (проверено чтением файла); "
+    "контроль паритета: CLI -> 'already up-to-date' (контент побайтно идентичен). "
+    "4. Негатив ✓ — пустая память: нет секции-огрызка "
+    "(test_build_dynamic_content_empty_memory_no_tail_stub); отказ генерации: файл "
+    "обновлён + 'Warning: memory tail unavailable' в ответе обработчика."
+)
+
+_REAL_AC_ONE_LINE = (
+    "1. Единая реализация: MCP-обработчик вызывает ту же функцию записи "
+    "динамической секции, что и CLI-путь. 2. Регрессионный тест ловит именно "
+    "СТИРАНИЕ: секция обязана сохраниться. 3. Живой замер на рендере: секция "
+    "остаётся в файле. 4. Негативный сценарий: при пустой памяти обновление "
+    "НЕ падает и не оставляет пустой секции."
+)
+
+
+def test_parse_ac_text_inline_single_line_counts_all():
+    items = parse_ac_text(_REAL_AC_ONE_LINE)
+    assert len(items) == 4
+    assert "Единая реализация" in items[0]
+    assert "Негативный сценарий" in items[3]
+
+
+def test_real_journal_line_session42_full_coverage():
+    rep = build_report(_REAL_AC_ONE_LINE, _REAL_JOURNAL_LINE)
+    assert rep.total_ac == 4
+    assert rep.covered == 4, f"gaps: {rep.gaps()}"
+    assert rep.gaps() == []
+    assert rep.has_negative_evidence is True  # «Негатив» — кириллица распознана
+
+
+def test_inline_items_carry_their_own_test_refs():
+    ac = "1. a 2. b"
+    notes = "AC verified: 1. ✓ tests/test_a.py::test_x 2. ✓ manual smoke run"
+    rep = build_report(ac, notes)
+    item1 = next(i for i in rep.items if i.ac_index == 1)
+    item2 = next(i for i in rep.items if i.ac_index == 2)
+    assert item1.has_test_ref is True
+    assert item1.has_manual is False  # сигналы посегментные, не на всю строку
+    assert item2.has_manual is True
+    assert item2.has_test_ref is False
+
+
+def test_ac_verified_prose_without_numbers_earns_nothing():
+    rep = build_report(
+        "1. a\n2. b",
+        "[2026-08-10T21:00:00Z] AC verified: всё хорошо ✓ критерии сходятся",
+    )
+    assert rep.covered == 0
+    assert rep.gaps() == [1, 2]
+
+
+def test_empty_notes_keep_full_gaps():
+    rep = build_report("1. a 2. b", "")
+    assert rep.total_ac == 2
+    assert rep.covered == 0
+    assert rep.gaps() == [1, 2]

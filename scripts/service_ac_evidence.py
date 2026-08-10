@@ -29,9 +29,27 @@ TEST_REF_RE = re.compile(
     r"(tests?/[\w/.\-]+\.py(?:::[\w_]+)?|test_[\w_]+\.py(?:::[\w_]+)?)",
     re.IGNORECASE,
 )
-NEGATIVE_RE = re.compile(r"\bnegative\b", re.IGNORECASE)
-MANUAL_RE = re.compile(r"\bmanual(?:ly)?\b", re.IGNORECASE)
+NEGATIVE_RE = re.compile(
+    r"\bnegative\b|\b\u043d\u0435\u0433\u0430\u0442\u0438\u0432", re.IGNORECASE
+)
+MANUAL_RE = re.compile(
+    r"\bmanual(?:ly)?\b|\b\u0432\u0440\u0443\u0447\u043d\u0443\u044e\b|\b\u0440\u0443\u0447\u043d",
+    re.IGNORECASE,
+)
 REVIEW_RE = re.compile(r"/review|review\s*record|adversarial", re.IGNORECASE)
+# Journal lines carry a timestamp prefix, so the marker is searched, not anchored.
+AC_VERIFIED_MARKER_RE = re.compile(r"\bAC\s+verified\b[:\s]*", re.IGNORECASE)
+# Guarded like gate_negative_scenario's splitter: a digit or dot right before
+# the number ("v1.4", "3680. 2") blocks the cut.
+_INLINE_ITEM_RE = re.compile(r"\s*(?:^|[^.\d])(\d+)[.)]\s+")
+
+
+def _split_inline_numbered(text: str) -> list[str]:
+    """Break '1. \u2026 2. \u2026 3. \u2026' written as one line into per-item strings."""
+    if not text:
+        return []
+    normalized = _INLINE_ITEM_RE.sub(r"\n\1. ", text)
+    return [ln.strip() for ln in normalized.splitlines() if ln.strip()]
 
 
 @dataclass
@@ -114,11 +132,16 @@ class AcCoverageReport:
 
 
 def parse_ac_text(ac_text: str) -> list[str]:
-    """Return AC item bodies in declaration order (1-indexed by position)."""
+    """Return AC item bodies in declaration order (1-indexed by position).
+
+    Inline numbering is normalized first: a single-line AC "1. a 2. b"
+    counts as two criteria, not one (QG-0 accepts that shape, so QG-2
+    must count it the same way).
+    """
     if not ac_text:
         return []
     items: list[str] = []
-    for raw in ac_text.splitlines():
+    for raw in _split_inline_numbered(ac_text):
         m = AC_NUMBER_PREFIX_RE.match(raw)
         if m and m.group(2).strip():
             items.append(m.group(2).strip())
@@ -128,7 +151,14 @@ def parse_ac_text(ac_text: str) -> list[str]:
 
 
 def parse_evidence_lines(notes_text: str) -> list[EvidenceLine]:
-    """Parse task notes into a list of EvidenceLine candidates."""
+    """Parse task notes into a list of EvidenceLine candidates.
+
+    A journal line "[ts] AC verified: 1. … ✓ 2. … ✓" carries several
+    criteria in one physical line — the remainder after the marker is
+    split on inline numbering and each item is parsed on its own.
+    Without numbered items after the marker ("AC verified: всё хорошо")
+    the line goes through the ordinary path and earns nothing.
+    """
     if not notes_text:
         return []
     out: list[EvidenceLine] = []
@@ -136,46 +166,63 @@ def parse_evidence_lines(notes_text: str) -> list[EvidenceLine]:
         line = raw.strip()
         if not line:
             continue
-        # First, capture line-level signals (review/negative/manual) once.
-        line_has_check = bool(CHECK_MARK_RE.search(line))
-        line_test_refs = TEST_REF_RE.findall(line)
-        line_manual = bool(MANUAL_RE.search(line))
-        line_negative = bool(NEGATIVE_RE.search(line))
-        line_review = bool(REVIEW_RE.search(line))
+        segments = [line]
+        marker = AC_VERIFIED_MARKER_RE.search(line)
+        if marker:
+            numbered = [
+                seg
+                for seg in _split_inline_numbered(line[marker.end() :])
+                if (m := AC_NUMBER_PREFIX_RE.match(seg)) and m.group(2).strip()
+            ]
+            if numbered:
+                segments = numbered
+        for segment in segments:
+            out.extend(_parse_single_line(segment))
+    return out
 
-        ac_indices: list[int] = []
-        m = AC_NUMBER_PREFIX_RE.match(line)
-        if m and m.group(2).strip():
-            try:
-                ac_indices.append(int(m.group(1)))
-            except (TypeError, ValueError):
-                pass
-        for inline in re.finditer(r"\bAC[-\s]*(\d+)\b", line, re.IGNORECASE):
-            try:
-                ac_indices.append(int(inline.group(1)))
-            except (TypeError, ValueError):
-                continue
-        ac_indices = list(dict.fromkeys(ac_indices)) or [None]  # type: ignore[list-item]
 
-        for ac_idx in ac_indices:
-            ev = EvidenceLine(
-                raw=line,
-                ac_index=ac_idx,
-                has_checkmark=line_has_check,
-                test_refs=line_test_refs,
-                is_manual=line_manual,
-                is_negative=line_negative,
-                is_review=line_review,
-            )
-            if (
-                ev.ac_index is not None
-                or ev.has_checkmark
-                or ev.test_refs
-                or ev.is_manual
-                or ev.is_negative
-                or ev.is_review
-            ):
-                out.append(ev)
+def _parse_single_line(line: str) -> list[EvidenceLine]:
+    """Ordinary per-line parse: signals + explicit AC-N / N. index refs."""
+    line_has_check = bool(CHECK_MARK_RE.search(line))
+    line_test_refs = TEST_REF_RE.findall(line)
+    line_manual = bool(MANUAL_RE.search(line))
+    line_negative = bool(NEGATIVE_RE.search(line))
+    line_review = bool(REVIEW_RE.search(line))
+
+    ac_indices: list[int] = []
+    m = AC_NUMBER_PREFIX_RE.match(line)
+    if m and m.group(2).strip():
+        try:
+            ac_indices.append(int(m.group(1)))
+        except (TypeError, ValueError):
+            pass
+    for inline in re.finditer(r"\bAC[-\s]*(\d+)\b", line, re.IGNORECASE):
+        try:
+            ac_indices.append(int(inline.group(1)))
+        except (TypeError, ValueError):
+            continue
+    ac_indices = list(dict.fromkeys(ac_indices)) or [None]  # type: ignore[list-item]
+
+    out: list[EvidenceLine] = []
+    for ac_idx in ac_indices:
+        ev = EvidenceLine(
+            raw=line,
+            ac_index=ac_idx,
+            has_checkmark=line_has_check,
+            test_refs=line_test_refs,
+            is_manual=line_manual,
+            is_negative=line_negative,
+            is_review=line_review,
+        )
+        if (
+            ev.ac_index is not None
+            or ev.has_checkmark
+            or ev.test_refs
+            or ev.is_manual
+            or ev.is_negative
+            or ev.is_review
+        ):
+            out.append(ev)
     return out
 
 
