@@ -45,11 +45,40 @@ _INLINE_ITEM_RE = re.compile(r"\s*(?:^|[^.\d])(\d+)[.)]\s+")
 
 
 def _split_inline_numbered(text: str) -> list[str]:
-    """Break '1. \u2026 2. \u2026 3. \u2026' written as one line into per-item strings."""
+    """Break '1. \u2026 2. \u2026 3. \u2026' written as one line into per-item strings.
+
+    Numbers inside \u00ab\u2026\u00bb spans are quoted material (format examples cited by
+    the criterion), not list structure \u2014 cuts there are skipped. An unpaired
+    closing \u00bb clamps depth at zero instead of poisoning the rest of the text.
+    Cuts must also read as a list: the first one on a small number (a real
+    enumeration never opens with \u00ab(\u0441\u0435\u0441\u0441\u0438\u044f #42)\u00bb), each next strictly +1.
+    """
     if not text:
         return []
-    normalized = _INLINE_ITEM_RE.sub(r"\n\1. ", text)
-    return [ln.strip() for ln in normalized.splitlines() if ln.strip()]
+    pieces: list[str] = []
+    last = 0
+    depth = 0
+    cursor = 0
+    expected: int | None = None
+    for m in _INLINE_ITEM_RE.finditer(text):
+        num_start = m.start(1)
+        for ch in text[cursor:num_start]:
+            if ch == "\u00ab":
+                depth += 1
+            elif ch == "\u00bb" and depth > 0:
+                depth -= 1
+        cursor = num_start
+        if depth > 0:
+            continue
+        n = int(m.group(1))
+        if (expected is None and n > 20) or (expected is not None and n != expected):
+            continue
+        expected = n + 1
+        if num_start > last:
+            pieces.append(text[last:num_start])
+        last = num_start
+    pieces.append(text[last:])
+    return [ln.strip() for piece in pieces for ln in piece.splitlines() if ln.strip()]
 
 
 @dataclass

@@ -183,3 +183,61 @@ def test_empty_notes_keep_full_gaps():
     assert rep.total_ac == 2
     assert rep.covered == 0
     assert rep.gaps() == [1, 2]
+
+
+# --- numbers quoted inside «…» are not criteria -------------------------
+# (ac-splitter-counts-quoted-numbers): the very closing of the parser fix
+# rendered "4/7 (gaps: AC 5, 6, 7)" — the splitter cut on the numbered
+# format examples QUOTED inside criterion bodies.
+
+# Faithful excerpt of the AC text that measured the defect.
+_QUOTED_AC_REAL = (
+    "1. Парсер распознаёт фактический журнальный формат "
+    "«AC verified: 1. … ✓ … 2. … ✓ …» (нумерованный список после префикса "
+    "AC verified) и засчитывает evidence по каждому номеру критерия: NOTE "
+    "рапортует N/N, а не 0/N. "
+    "2. Прежний формат «AC-1: ✓ tested via tests/...» продолжает "
+    "распознаваться, регресс запрещён. "
+    "3. Тест воспроизводит замеренный случай: реальная строка журнала "
+    "(сессия #42) даёт полное покрытие критериев. "
+    "4. Негативный сценарий: произвольный текст не засчитывается."
+)
+
+
+def test_numbers_inside_guillemets_are_not_criteria():
+    items = parse_ac_text(_QUOTED_AC_REAL)
+    assert len(items) == 4, [i[:40] for i in items]
+    assert "Парсер распознаёт" in items[0]
+    assert "Негативный сценарий" in items[3]
+
+
+def test_quoted_example_in_journal_marker_line_not_split():
+    ac = "1. a 2. b"
+    notes = "AC verified: 1. ✓ формат «AC verified: 1. … 2. …» распознан 2. ✓ ok"
+    rep = build_report(ac, notes)
+    assert rep.total_ac == 2
+    assert rep.covered == 2
+    assert rep.gaps() == []
+
+
+def test_unpaired_closing_guillemet_clamps_depth():
+    text = "странный » хвост 1. a 2. b «пример 7. внутри» 3. c"
+    items = parse_ac_text(text)
+    assert len(items) == 3, [i[:40] for i in items]
+    assert "внутри" in items[1]  # «7.» остался телом второго критерия
+    assert items[2] == "c"
+
+
+def test_partial_verification_journal_starts_mid_list():
+    ac = "1. a 2. b 3. c"
+    notes = "AC verified: 3. ✓ добит последний критерий tests/test_x.py::test_c"
+    rep = build_report(ac, notes)
+    item3 = next(i for i in rep.items if i.ac_index == 3)
+    assert item3.has_any_evidence is True
+    assert rep.covered == 1
+
+
+def test_large_number_in_prose_does_not_open_a_list():
+    ac = "1. проверка (сессия #42) даёт полное покрытие 2. негатив"
+    items = parse_ac_text(ac)
+    assert len(items) == 2, [i[:40] for i in items]
