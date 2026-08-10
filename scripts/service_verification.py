@@ -311,6 +311,25 @@ def run_gates_with_cache(
     # closing the task. This is the "auth/login.py exists, no tests/test_login.py"
     # bypass discovered by the v1.3 blind review.
     if files and results and all(r.get("skipped") for r in results):
+        # A scope that is entirely foreign is a different failure from a missing
+        # test, and must not be answered with the same advice: "add
+        # tests/test_<basename>.py" cannot be followed for a file this project
+        # does not own (conv #129 — remediation is judged by executing its text).
+        # Say what was not verified and let the operator carry it; blocking here
+        # would leave portfolio tasks unclosable by any action available to them.
+        from gate_scope import split_by_project_root  # noqa: PLC0415
+
+        own_files, foreign_files = split_by_project_root(files)
+        if not own_files:
+            if append_notes_fn is not None:
+                append_notes_fn(
+                    slug,
+                    f"NOT VERIFIED HERE: all {len(foreign_files)} relevant_files belong to "
+                    f"another project ({', '.join(foreign_files)}). This project's gates "
+                    "checked NOTHING — closing is an operator assertion, not a verification, "
+                    "and the evidence has to come from the project that owns the code.",
+                )
+            return passed, results, "foreign-scope"
         if append_notes_fn is not None:
             append_notes_fn(
                 slug,

@@ -42,6 +42,7 @@ from gate_builtin_checks import (  # noqa: E402,F401
     run_filesize_gate,
     run_tdd_order_gate,
 )
+from gate_scope import external_scope_note, split_by_project_root  # noqa: E402
 from gate_test_resolver import resolve_test_files_for_relevant  # noqa: F401, E402
 
 # v14b-filesize-debt-paydown: run_command_gate + _SCOPED_SKIP_SENTINEL extracted
@@ -52,6 +53,12 @@ from gate_command_runner import (  # noqa: F401, E402
     _SCOPED_SKIP_SENTINEL,
     run_command_gate,
 )
+
+
+# Built-ins that judge the handed-in file list itself. Command gates pick their
+# own inputs (mypy reads pyproject) and already report an unrun check honestly,
+# so they are not listed here.
+_SCOPE_JUDGING_BUILTINS = ("filesize", "tdd_order")
 
 
 def run_gates(
@@ -68,6 +75,14 @@ def run_gates(
     gates = get_gates_for_trigger(trigger, cfg)
     if not gates:
         return True, []
+
+    # Foreign files are dropped from the scope BEFORE any gate sees them: their
+    # rules belong to their own project, and judging them here answers a question
+    # nobody asked. What is dropped is reported alongside every result — see
+    # gate_scope for why silence would be the worse failure.
+    files_in, files_out = split_by_project_root(files or [])
+    scope_emptied = bool(files_out) and not files_in
+    scope_note = external_scope_note(files_out, scope_emptied=scope_emptied) if files_out else None
 
     results = []
     has_block_failure = False
@@ -111,8 +126,37 @@ def run_gates(
                 }
             )
 
-        if not gate_applies_to(gate, files or []):
-            skipped = skipped_result(gate, files or [])
+        # An emptied scope is reported as "verified nothing", never as a pass:
+        # these built-ins judge the list they are handed, and on an empty list
+        # they answer "all clear" (measured) — indistinguishable from a real green.
+        if scope_emptied and name in _SCOPE_JUDGING_BUILTINS:
+            results.append(
+                {
+                    "name": name,
+                    "severity": severity,
+                    "passed": True,
+                    "skipped": True,
+                    "output": scope_note,
+                }
+            )
+            if progress_callback:
+                progress_callback(
+                    {
+                        "event": "gate_done",
+                        "index": idx,
+                        "total": total,
+                        "name": name,
+                        "severity": severity,
+                        "passed": True,
+                        "skipped": True,
+                        "duration_ms": int((time.monotonic() - start_ms) * 1000),
+                        "output": scope_note,
+                    }
+                )
+            continue
+
+        if not gate_applies_to(gate, files_in):
+            skipped = skipped_result(gate, files_in)
             results.append(skipped)
             if progress_callback:
                 progress_callback(
@@ -131,13 +175,13 @@ def run_gates(
             continue
 
         if name == "filesize":
-            passed, output = run_filesize_gate(gate, files or [])
+            passed, output = run_filesize_gate(gate, files_in)
         elif name == "tdd_order":
-            passed, output = run_tdd_order_gate(gate, files or [])
+            passed, output = run_tdd_order_gate(gate, files_in)
         elif name == "bootstrap_drift":
-            passed, output = run_bootstrap_drift_gate(gate, files or [])
+            passed, output = run_bootstrap_drift_gate(gate, files_in)
         else:
-            passed, output = run_command_gate(gate, files or [], trigger=trigger)
+            passed, output = run_command_gate(gate, files_in, trigger=trigger)
 
         # Scoped-skip sentinel from run_command_gate: either relevant_files
         # were provided but no test files mapped, OR no relevant_files at
@@ -155,7 +199,7 @@ def run_gates(
                 skip_reason = (
                     "No test file maps to relevant_files via "
                     "tests/test_<basename>.py heuristic; gate skipped (scoped run)."
-                    if files
+                    if files_in
                     # The advice names `task update`, NOT `verify`: `tausik verify`
                     # accepts only --task/--scope, so the older wording ("pass
                     # --relevant-files") sent anyone who followed it literally into
@@ -219,6 +263,10 @@ def run_gates(
         if not passed and severity == "block":
             has_block_failure = True
 
+    if scope_note:
+        for r in results:
+            r["scope_note"] = scope_note
+
     return not has_block_failure, results
 
 
@@ -243,6 +291,12 @@ def format_results(results: list[dict]) -> str:
         if r["output"] and (not r["passed"] or r.get("skipped")):
             for line in r["output"].split("\n")[:5]:
                 lines.append(f"         {line}")
+        # Printed even on PASS, unlike `output` above: a narrowed scope is
+        # precisely the case where the verdict looks stronger than it is, and a
+        # bare [PASS] beside dropped files claims coverage that never happened.
+        note = r.get("scope_note")
+        if note and not (r.get("skipped") and r["output"] == note):
+            lines.append(f"         {note}")
     return "\n".join(lines)
 
 

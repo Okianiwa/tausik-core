@@ -1287,3 +1287,68 @@ class TestRelaxedMismatchCacheHit:
         monkeypatch.setattr("gate_runner.run_gates", fake_run)
         sv.run_gates_with_cache(conn, "stale-task", ["scripts/foo.py"])
         assert called["n"] == 1, "stale relaxed row must not satisfy task_done"
+
+
+class TestForeignScopeIsNotMissingTests:
+    """A scope made entirely of another project's files is a different failure
+    from "source without a test", and must not be answered with advice that
+    cannot be executed (conv #129)."""
+
+    @staticmethod
+    def _all_skipped(*_a, **_kw):
+        return True, [{"name": "filesize", "passed": True, "skipped": True, "output": "skip"}]
+
+    def test_foreign_only_scope_does_not_block_on_missing_tests(self, conn, monkeypatch):
+        import gate_scope
+
+        monkeypatch.setattr("gate_runner.run_gates", self._all_skipped)
+        monkeypatch.setattr(gate_scope, "project_root", lambda: os.path.join("D:", os.sep, "proj"))
+        notes = []
+
+        passed, results, status = sv.run_gates_with_cache(
+            conn,
+            "portfolio-task",
+            [os.path.join("D:", os.sep, "other", "bench.py")],
+            append_notes_fn=lambda _s, m: notes.append(m),
+        )
+
+        assert passed is True
+        assert status == "foreign-scope"
+        assert not any(r["name"] == "scoped-pytest" for r in results), (
+            "must not claim missing tests for a file this project does not own"
+        )
+        assert any("NOT VERIFIED HERE" in n for n in notes), "the gap has to be stated out loud"
+
+    def test_own_file_without_tests_still_blocks(self, conn, monkeypatch):
+        """Mutation control: the original guard must survive the new branch."""
+        import gate_scope
+
+        monkeypatch.setattr("gate_runner.run_gates", self._all_skipped)
+        monkeypatch.setattr(gate_scope, "project_root", lambda: os.path.join("D:", os.sep, "proj"))
+
+        passed, results, status = sv.run_gates_with_cache(
+            conn, "own-task", [os.path.join("D:", os.sep, "proj", "scripts", "foo.py")]
+        )
+
+        assert passed is False
+        assert status == "no-test-mapped"
+        assert results[0]["name"] == "scoped-pytest"
+
+    def test_mixed_scope_keeps_the_missing_test_verdict(self, conn, monkeypatch):
+        """One own file among foreign ones is still an unverified own file."""
+        import gate_scope
+
+        monkeypatch.setattr("gate_runner.run_gates", self._all_skipped)
+        monkeypatch.setattr(gate_scope, "project_root", lambda: os.path.join("D:", os.sep, "proj"))
+
+        passed, _, status = sv.run_gates_with_cache(
+            conn,
+            "mixed-task",
+            [
+                os.path.join("D:", os.sep, "proj", "scripts", "foo.py"),
+                os.path.join("D:", os.sep, "other", "bench.py"),
+            ],
+        )
+
+        assert passed is False
+        assert status == "no-test-mapped"
