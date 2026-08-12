@@ -65,12 +65,23 @@ _READ_TOOLS = "Read|Grep|Glob|WebFetch|WebSearch"
 ACTIVITY_MATCHER = f"^(?:{_FILE_WRITE_TOOLS}|{_SHELL_TOOLS}|{_READ_TOOLS})$"
 
 
-def build_hooks_dict(hook_cmd: Callable[..., str]) -> dict[str, Any]:
+def build_hooks_dict(
+    hook_cmd: Callable[..., str], autoloop_cmd: Callable[..., str] | None = None
+) -> dict[str, Any]:
     """Build the `hooks` block of .claude/settings.json.
 
     `hook_cmd(script, suffix="")` returns the formatted command string
     (`python <abs path>/<script><suffix>`).
+
+    `autoloop_cmd(script)` does the same for the autoloop package, which sits
+    beside hooks/ rather than inside it. Defaults to a path relative to hooks/
+    so existing callers keep working.
     """
+    if autoloop_cmd is None:
+
+        def autoloop_cmd(script: str) -> str:
+            return hook_cmd(f"../autoloop/{script}")
+
     return {
         "PreToolUse": [
             {
@@ -314,7 +325,15 @@ def build_hooks_dict(hook_cmd: Callable[..., str]) -> dict[str, Any]:
                         "type": "command",
                         "command": hook_cmd("session_start.py"),
                         "timeout": 6,
-                    }
+                    },
+                    # Context watcher. Registered everywhere, active only where
+                    # `.tausik/config.json` says `autoloop.watch: true` — the
+                    # hook checks that itself and exits silently otherwise.
+                    {
+                        "type": "command",
+                        "command": hook_cmd("chat_watch.py"),
+                        "timeout": 5,
+                    },
                 ],
             }
         ],
@@ -342,6 +361,26 @@ def build_hooks_dict(hook_cmd: Callable[..., str]) -> dict[str, Any]:
                     {
                         "type": "command",
                         "command": hook_cmd("session_cleanup_check.py"),
+                        "timeout": 5,
+                    },
+                    # Context fill measurement. Measures always — the reading is
+                    # what makes the run observable; acting on it is elsewhere.
+                    {
+                        "type": "command",
+                        "command": autoloop_cmd("sensor.py"),
+                        "timeout": 10,
+                    },
+                    # Ends an autonomous iteration. Inert without the run marker.
+                    {
+                        "type": "command",
+                        "command": autoloop_cmd("exit_guard.py"),
+                        "timeout": 10,
+                    },
+                    # Says "the input line is free". Writes nothing unless a
+                    # watcher is actually waiting for it.
+                    {
+                        "type": "command",
+                        "command": hook_cmd("chat_ready.py"),
                         "timeout": 5,
                     },
                 ],

@@ -1,0 +1,261 @@
+"""When to clean the window, and the order it has to happen in.
+
+Kept apart from the terminal plumbing on purpose: this is the part that can be
+wrong in a way tests can catch. Every decision here is a rule about timing,
+and all three rules exist because breaking them loses work:
+
+  * never type without the readiness flag — an Enter sent during a turn can
+    answer an open permission dialog;
+  * never send `/clear` before `/checkpoint` has finished — the handoff has
+    not reached the database yet, and the context is the only other copy;
+  * never clean on a missing measurement — no reading is not a reading of
+    zero.
+"""
+
+from __future__ import annotations
+
+import os
+import time
+
+READY_FLAG = os.path.join(".tausik", ".chat.ready")
+STARTED_FLAG = os.path.join(".tausik", ".chat.started")
+LOCK_FILE = os.path.join(".tausik", ".chat.lock")
+
+# Order matters: state to disk, then wipe, then reload it.
+#
+# Every command names the trace that proves it arrived. `/clear` ends no turn,
+# so the Stop flag never comes for it — but it restarts the session, and the
+# SessionStart hook leaves its own mark. Waiting on a timer instead cost a run:
+# four seconds after `/clear` the chat was still rebuilding itself, the keys
+# for `/start` fell on the floor, and the Enter behind them re-sent the leftover
+# `/clear` (dead end #19).
+WAIT_TURN = "turn"  # Stop hook — a model turn finished
+WAIT_SESSION = "session"  # SessionStart hook — the chat came back up
+
+SEQUENCE = (
+    ("/checkpoint", WAIT_TURN),
+    ("/clear", WAIT_SESSION),
+    ("/start", WAIT_TURN),
+)
+# Closing the session belongs to the clock, not to the window. A full context
+# says nothing about how long the work has been running, and a session closed
+# early throws away the history the metrics are counted from.
+END_STEP = ("/end", WAIT_TURN)
+
+
+def sequence(close_session: bool = False):
+    """The commands to type, in order.
+
+    `/end` goes after the checkpoint and before the wipe: the handoff has to be
+    written while the conversation it summarises still exists.
+    """
+    if not close_session:
+        return SEQUENCE
+    return SEQUENCE[:1] + (END_STEP,) + SEQUENCE[1:]
+
+
+ARM_SECONDS = 15.0
+READY_TIMEOUT = 240.0
+SESSION_TIMEOUT = 90.0
+SETTLE_AFTER_SESSION = 3.0  # the flag means "started", not "finished drawing"
+KEY_SETTLE = 0.3  # between Esc and the command, so they are not read as one
+DELIVERY_ATTEMPTS = 3
+CANCEL_QUIET = 600.0  # how long a refusal holds before offering again
+
+STATE_IDLE = "idle"
+STATE_ARMED = "armed"
+STATE_DONE = "done"
+
+
+def flag_path(project_dir: str) -> str:
+    return os.path.join(project_dir, READY_FLAG)
+
+
+def is_ready(project_dir: str) -> bool:
+    return os.path.exists(flag_path(project_dir))
+
+
+def clear_ready(project_dir: str) -> None:
+    try:
+        os.unlink(flag_path(project_dir))
+    except OSError:
+        pass
+
+
+def wait_ready(project_dir: str, timeout: float, sleep=time.sleep) -> bool:
+    """Block until the host says the input line is free."""
+    return _wait_flag(flag_path(project_dir), timeout, sleep)
+
+
+def started_path(project_dir: str) -> str:
+    return os.path.join(project_dir, STARTED_FLAG)
+
+
+def clear_started(project_dir: str) -> None:
+    try:
+        os.unlink(started_path(project_dir))
+    except OSError:
+        pass
+
+
+def wait_started(project_dir: str, timeout: float, sleep=time.sleep) -> bool:
+    """Block until a new session has come up — the only proof `/clear` landed."""
+    return _wait_flag(started_path(project_dir), timeout, sleep)
+
+
+def _wait_flag(path: str, timeout: float, sleep=time.sleep) -> bool:
+    """Consume the flag on arrival: a leftover one answers the next question
+    before it is asked."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if os.path.exists(path):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            return True
+        sleep(0.1)
+    return False
+
+
+def confirm(project_dir: str, trace: str, sleep=time.sleep) -> bool:
+    """Did the command actually run? Nothing else here knows.
+
+    Writing into a console buffer succeeds whether or not the chat is reading
+    it, so `sent` is not `arrived` — the run that failed logged three successes
+    for two commands.
+    """
+    if trace == WAIT_TURN:
+        return wait_ready(project_dir, READY_TIMEOUT, sleep)
+    if trace == WAIT_SESSION:
+        if not wait_started(project_dir, SESSION_TIMEOUT, sleep):
+            return False
+        sleep(SETTLE_AFTER_SESSION)
+        return True
+    return True
+
+
+def needs_maintenance(percent, threshold) -> bool:
+    """A missing measurement is not a full window."""
+    if not isinstance(percent, (int, float)) or isinstance(percent, bool):
+        return False
+    return percent >= threshold
+
+
+def read_lock(project_dir: str):
+    try:
+        with open(os.path.join(project_dir, LOCK_FILE), encoding="utf-8") as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def lock_is_stale(pid, running_pids) -> bool:
+    """A lock from a driver that died is not a reason to refuse."""
+    return pid is None or str(pid) not in {str(p) for p in running_pids}
+
+
+def take_lock(project_dir: str, pid: int) -> None:
+    path = os.path.join(project_dir, LOCK_FILE)
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(str(pid))
+    except OSError:
+        pass
+
+
+def release_lock(project_dir: str) -> None:
+    try:
+        os.unlink(os.path.join(project_dir, LOCK_FILE))
+    except OSError:
+        pass
+
+
+class Maintenance:
+    """Arms on a full window, waits out a grace period, then runs the sequence.
+
+    The grace period is the whole difference between a wrapper and a tool that
+    wipes the conversation from under the person typing into it.
+    """
+
+    def __init__(
+        self, threshold=30, arm_seconds=ARM_SECONDS, ready_timeout=READY_TIMEOUT
+    ):
+        self.threshold = threshold
+        self.arm_seconds = arm_seconds
+        self.ready_timeout = ready_timeout
+        self.state = STATE_IDLE
+        self.armed_at: float | None = None
+        self.quiet_until = 0.0
+        # After one cleanup the window must be seen empty before another is
+        # offered. Without this a stuck reading re-arms on every tick and the
+        # chat fills with warnings — observed live, three in a row.
+        self.awaiting_drop = False
+
+    def consider(self, percent, now: float) -> bool:
+        """Start the countdown when the window is full. Returns True the moment
+        it arms, so the caller announces it exactly once."""
+        if not needs_maintenance(percent, self.threshold):
+            self.awaiting_drop = False
+            return False
+        if self.state != STATE_IDLE or self.awaiting_drop or now < self.quiet_until:
+            return False
+        self.state = STATE_ARMED
+        self.armed_at = now
+        return True
+
+    def cancel(self, now: float = 0.0, quiet_for: float = CANCEL_QUIET) -> bool:
+        """The human said no. Returns True when there was something to cancel.
+
+        A refusal holds: asking again ten seconds later is the same as not
+        asking at all."""
+        if self.state != STATE_ARMED:
+            return False
+        self.state = STATE_IDLE
+        self.armed_at = None
+        self.quiet_until = now + quiet_for
+        return True
+
+    def due(self, now: float) -> bool:
+        return (
+            self.state == STATE_ARMED
+            and self.armed_at is not None
+            and (now - self.armed_at) >= self.arm_seconds
+        )
+
+    def run(self, send, ready, announce, confirm=None) -> bool:
+        """The sequence itself.
+
+        Two gates, not one. `ready(timeout)` before the first command, because
+        typing into a running turn can answer a permission dialog. Then
+        `confirm(trace)` after each one, because a command that was typed is
+        not a command that ran — and the step nobody confirmed is exactly the
+        step that silently failed. Aborting before `/clear` is the whole point:
+        a half-finished checkpoint plus a wiped context is the one outcome
+        worse than a full window.
+        """
+        self.state = STATE_DONE
+
+        def stop(command: str) -> bool:
+            announce(
+                f"[chat] очистка отменена: чат не освободился перед {command}. "
+                "Контекст не тронут; при необходимости запусти /checkpoint вручную."
+            )
+            self.state = STATE_IDLE
+            self.awaiting_drop = True  # do not re-offer on the same reading
+            return False
+
+        if not ready(self.ready_timeout):
+            return stop(SEQUENCE[0][0])
+        for command, trace in SEQUENCE:
+            send(command)
+            landed = (
+                confirm(trace)
+                if confirm
+                else (trace != WAIT_TURN or ready(self.ready_timeout))
+            )
+            if not landed:
+                return stop(command)
+        self.state = STATE_IDLE
+        self.awaiting_drop = True
+        return True

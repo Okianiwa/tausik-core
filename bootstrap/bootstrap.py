@@ -43,6 +43,7 @@ from bootstrap_copy import (
     copy_aidd_templates,
     copy_mcp,
     copy_references,
+    copy_autonomy_profile,
     copy_roles,
     copy_scripts,
     copy_skills,
@@ -138,6 +139,9 @@ def bootstrap_ide(
 
     n_roles = copy_roles(lib_dir, target_dir, ide)
     print(f"  Roles: {n_roles} copied")
+
+    if copy_autonomy_profile(lib_dir, target_dir, ide):
+        print("  Autonomy profile: installed")
 
     n_subagents = copy_subagents(lib_dir, target_dir, ide)
     if n_subagents:

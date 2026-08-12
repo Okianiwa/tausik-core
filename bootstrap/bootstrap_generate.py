@@ -40,6 +40,15 @@ def generate_settings_claude(target_dir: str, project_dir: str, lib_dir: str | N
     # pre-existing edge, and quotes would break the hooks-parity tokenizer.
     rel_hooks = portable_path(os.path.abspath(hooks_dir), project_dir, _CLAUDE_HOOK_VAR)
 
+    # The autoloop package lives beside hooks/, not in it — its Stop hooks need
+    # their own prefix rather than a `../` walk out of the hooks directory.
+    rel_scripts = portable_path(
+        os.path.abspath(os.path.join(lib_dir, "scripts")), project_dir, _CLAUDE_HOOK_VAR
+    )
+
+    def _autoloop_cmd(script: str) -> str:
+        return f"python -X utf8 {rel_scripts}/autoloop/{script}"
+
     def _hook_cmd(script: str, suffix: str = "") -> str:
         # -X utf8 forces UTF-8 stdio for every hook (they run directly, not via
         # the CLI wrapper, so they don't inherit its PYTHONUTF8). One injection
@@ -56,7 +65,7 @@ def generate_settings_claude(target_dir: str, project_dir: str, lib_dir: str | N
                 "Bash(git:*)",
             ]
         },
-        "hooks": build_hooks_dict(_hook_cmd),
+        "hooks": build_hooks_dict(_hook_cmd, _autoloop_cmd),
     }
     path = os.path.join(target_dir, "settings.json")
     with open(path, "w", encoding="utf-8") as f:

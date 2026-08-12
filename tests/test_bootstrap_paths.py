@@ -129,7 +129,10 @@ def test_claude_hooks_are_rename_proof(tmp_path):
         for h in entry["hooks"]
     ]
     assert cmds, "no hooks generated"
-    assert all("${CLAUDE_PROJECT_DIR}/.tausik-lib/scripts/hooks/" in c for c in cmds)
+    # scripts/hooks/ for most, scripts/autoloop/ for the two that live in the
+    # autoloop package — what matters is that every path goes through the
+    # variable, so renaming the project folder cannot break a hook.
+    assert all("${CLAUDE_PROJECT_DIR}/.tausik-lib/scripts/" in c for c in cmds)
     # No quotes around the path — else the hooks-parity tokenizer (splits on
     # whitespace, matches *.py) would fail to extract script basenames.
     assert all('"' not in c for c in cmds)

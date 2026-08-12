@@ -293,6 +293,25 @@ def copy_subagents(lib_dir: str, target_dir: str, ide: str) -> int:
     return n
 
 
+def copy_autonomy_profile(lib_dir: str, target_dir: str, ide: str) -> int:
+    """Ship the headless run's permission profile (Claude only).
+
+    Never overwrites: this file is also the one a human reads and edits to see
+    what an unattended run is allowed to do, and a redeploy silently replacing
+    their allow-list is how a project ends up permitting more than its owner
+    agreed to. Updates to the template reach existing projects only when the
+    local copy is deleted first.
+    """
+    if ide != "claude":
+        return 0
+    src = os.path.join(lib_dir, "harness", "claude", "settings.autonomy.json")
+    dst = os.path.join(target_dir, "settings.autonomy.json")
+    if not os.path.isfile(src) or os.path.exists(dst):
+        return 0
+    shutil.copy2(src, dst)
+    return 1
+
+
 def copy_roles(lib_dir: str, target_dir: str, ide: str) -> int:
     """Copy role profiles from harness/roles/ (shared) to target."""
     roles_src = os.path.join(lib_dir, "harness", "roles")

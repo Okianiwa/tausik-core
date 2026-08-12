@@ -1,0 +1,57 @@
+{
+  "$comment": [
+    "Permission profile for supervised headless runs only — passed to the child",
+    "process via `claude -p --settings .claude/settings.autonomy.json`. It is NOT",
+    "loaded by interactive sessions and must never be merged into settings.json.",
+    "",
+    "The allow-list is enumerated rather than blanket: an unattended agent with",
+    "Bash(*) can do anything the account can, and the whole point of the loop is",
+    "that nobody is watching it. Everything absent from this list still prompts —",
+    "in headless mode a prompt means the call is simply refused, which is the",
+    "safe direction to fail.",
+    "",
+    "The deny list is a second layer over bash_firewall.py, not a replacement:",
+    "the firewall stays active in autonomous runs (TAUSIK_SKIP_HOOKS is treated",
+    "as disqualifying by autonomy.py)."
+  ],
+  "permissions": {
+    "allow": [
+      "Bash(.tausik/tausik:*)",
+      "Bash(.tausik/tausik.cmd:*)",
+      "Bash(python:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(pytest:*)",
+      "Bash(ruff:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git branch:*)",
+      "Bash(git checkout -b:*)",
+      "Bash(git rev-parse:*)",
+      "Read",
+      "Glob",
+      "Grep",
+      "Write",
+      "Edit"
+    ],
+    "deny": [
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean -fd:*)",
+      "Bash(git rebase:*)",
+      "Bash(rm -rf:*)",
+      "Bash(curl:*)",
+      "Bash(wget:*)",
+      "Write(.claude/settings.json)",
+      "Edit(.claude/settings.json)",
+      "Write(.claude/settings.autonomy.json)",
+      "Edit(.claude/settings.autonomy.json)"
+    ]
+  }
+}

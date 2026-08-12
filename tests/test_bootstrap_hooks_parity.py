@@ -29,6 +29,13 @@ CROSSCUTTING_SCOPE = ["bootstrap/"]
 sys.path.insert(0, str(BOOTSTRAP))
 
 
+# Claude-only by construction, not by omission: the autoloop mechanism drives a
+# Claude Code chat — it reads that host's transcripts, types `/clear` into its
+# console, and hangs off its SessionStart. Under Qwen Code there is nothing for
+# these to attach to, so shipping them there would be parity in name only.
+CLAUDE_ONLY = {"chat_watch.py", "chat_ready.py", "sensor.py", "exit_guard.py"}
+
+
 def _collect_hook_scripts(settings: dict) -> set[str]:
     """Flatten settings.hooks into a set of script basenames."""
     scripts: set[str] = set()
@@ -74,7 +81,7 @@ def qwen_settings(tmp_path):
 def test_qwen_has_every_claude_hook(claude_settings, qwen_settings):
     claude_scripts = _collect_hook_scripts(claude_settings)
     qwen_scripts = _collect_hook_scripts(qwen_settings)
-    missing = claude_scripts - qwen_scripts
+    missing = claude_scripts - qwen_scripts - CLAUDE_ONLY
     assert not missing, (
         f"Qwen settings.json is missing hooks present in Claude: {sorted(missing)}. "
         "Update bootstrap/bootstrap_qwen.py to keep parity, or update this test "
