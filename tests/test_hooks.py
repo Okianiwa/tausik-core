@@ -958,6 +958,35 @@ class TestPushTicketAcrossRepositories:
         assert r.returncode == 2
         assert "expired" in r.stderr
 
+    def test_a_repo_without_tausik_uses_its_git_dir(self, tmp_path):
+        """A plain checkout must be authorizable without gaining a `.tausik`:
+        creating one would make it read as an unregistered TAUSIK project —
+        the factory's registry eval catches exactly that."""
+        from datetime import datetime, timedelta, timezone
+
+        repo = tmp_path / "plain"
+        sha = self._init_repo(repo)
+        (repo / ".git" / ".push_ticket.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "commit_sha": sha,
+                    "branch": "main",
+                    "repo_root": str(repo),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+                }
+            ),
+            encoding="utf-8",
+        )
+        r = run_hook(
+            "git_push_gate.py",
+            {"tool_input": {"command": f"cd {repo} && git push"}},
+            cwd=self._session(tmp_path),
+        )
+        assert r.returncode == 0, r.stderr
+        assert not (repo / ".tausik").exists()
+
     @pytest.mark.skipif(os.name != "nt", reason="MSYS drive spelling is Windows-only")
     def test_a_git_bash_drive_path_is_understood(self, tmp_path):
         """Git Bash writes `cd /d/repo`; read literally on Windows that points

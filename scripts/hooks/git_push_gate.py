@@ -196,7 +196,16 @@ def _ticket_path(target_dir: Path | None = None) -> Path | None:
         return Path(override)
     # Prefer the .tausik belonging to the repository being pushed — `push-ok`
     # writes the ticket next to the repo it ran in — then the session's own.
-    candidates = [d for d in (_find_tausik_dir(target_dir), _find_tausik_dir()) if d is not None]
+    git_dir = _git(["rev-parse", "--absolute-git-dir"], cwd=target_dir)
+    candidates = [
+        d
+        for d in (
+            _find_tausik_dir(target_dir),
+            Path(git_dir) if git_dir else None,  # repo without a TAUSIK of its own
+            _find_tausik_dir(),
+        )
+        if d is not None
+    ]
     for tdir in candidates:
         if (tdir / TICKET_FILENAME).exists():
             return tdir / TICKET_FILENAME

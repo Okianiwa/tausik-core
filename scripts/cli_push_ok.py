@@ -102,19 +102,21 @@ def cmd_push_ok(_svc_unused: Any, args: Any) -> None:
         )
         sys.exit(1)
     repo_root = _git(["rev-parse", "--show-toplevel"]) or ""
-    # The gate looks for the ticket beside the repository being pushed, then
-    # in the session's own .tausik. A repository that carries no TAUSIK of its
-    # own — the ops repo, a plain checkout — would otherwise have nowhere to
-    # put one, which is how a legitimate push became unauthorizable.
+    # A repository carrying no TAUSIK of its own — the ops repo, a plain
+    # checkout — had nowhere to put a ticket, which is how a legitimate push
+    # became unauthorizable. Its git dir is the right home: always present,
+    # never part of the working tree. Creating a `.tausik` there instead
+    # would make the checkout look like an unregistered TAUSIK project.
     tausik_dir = _find_tausik_dir()
     if tausik_dir is None:
-        if not repo_root:
+        git_dir = _git(["rev-parse", "--absolute-git-dir"])
+        if not git_dir:
             print(
                 "error: no .tausik directory found — run `tausik init` first",
                 file=sys.stderr,
             )
             sys.exit(1)
-        tausik_dir = Path(repo_root) / ".tausik"
+        tausik_dir = Path(git_dir)
     branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]) or ""
     path = write_push_ticket(
         tausik_dir, ttl_seconds=ttl, commit_sha=sha, branch=branch, repo_root=repo_root
