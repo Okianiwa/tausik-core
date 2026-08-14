@@ -16,7 +16,10 @@ from __future__ import annotations
 import re
 
 
-NEGATIVE_SCENARIO_KEYWORDS = (
+# Words that name a *problem*. A negation in front of one of these cancels it:
+# "works without any errors" promises the absence of trouble, which is not a
+# scenario anybody has to handle.
+PROBLEM_KEYWORDS = (
     "error",
     "fail",
     "invalid",
@@ -26,19 +29,15 @@ NEGATIVE_SCENARIO_KEYWORDS = (
     "404",
     "422",
     "500",
-    "ошибк",
+    "ошиб",  # корень, а не «ошибк»: иначе «без ошибок» не опознаётся как обещание
     "невалидн",
     "отказ",
     "некорректн",
-    "пуст",
-    "отсутств",
-    "not found",
     "denied",
     "unauthorized",
     "timeout",
-    "empty",
-    "missing",
     "negative",
+    "негативн",
     "не должн",
     "не может",
     "запрещ",
@@ -75,10 +74,35 @@ NEGATIVE_SCENARIO_KEYWORDS = (
 )
 
 
-_NEG_KW_RE = re.compile(
-    r"(?<![\w])(?:" + "|".join(re.escape(k) for k in NEGATIVE_SCENARIO_KEYWORDS) + r")",
-    re.IGNORECASE,
+# Words that name an *absent input*: an empty journal, a missing key, a null
+# value. These are the boundary cases themselves, so a negation in front of one
+# ("без единой записи", "with no config file") states the scenario rather than
+# denying it — and must not be redacted away with it.
+ABSENCE_KEYWORDS = (
+    "пуст",
+    "отсутств",
+    "empty",
+    "missing",
+    "not found",
+    "none",
+    "null",
 )
+
+# Kept as the union under its old name: other modules import it.
+NEGATIVE_SCENARIO_KEYWORDS = PROBLEM_KEYWORDS + ABSENCE_KEYWORDS
+
+
+def _boundary_re(words):
+    return re.compile(r"(?<![\w])(?:" + "|".join(re.escape(k) for k in words) + r")", re.IGNORECASE)
+
+
+_PROBLEM_RE = _boundary_re(PROBLEM_KEYWORDS)
+_ABSENCE_RE = _boundary_re(ABSENCE_KEYWORDS)
+_NEG_KW_RE = _boundary_re(NEGATIVE_SCENARIO_KEYWORDS)
+# "без ключей", "without a config": what follows names the thing that is
+# missing, not the trouble it causes.
+_ABSENCE_PHRASE_RE = re.compile(r"\b(?:без|without|with no|no)\s+(\S+)", re.IGNORECASE)
+_LOOKAHEAD = 40
 # Negation prefix that *cancels* a negative keyword on the same line. The
 # match consumes up to the next sentence boundary (.,;\n) or 60 non-sentence
 # chars so the keyword the negation governs gets redacted along with it.
@@ -103,19 +127,40 @@ def _split_ac_into_criteria(ac_text: str) -> list[str]:
     return [ln.strip() for ln in normalized.splitlines() if ln.strip()]
 
 
+def _absence_stated(line: str) -> bool:
+    """Does the line describe something that will be missing?
+
+    "без ключей", "with no config file" — the criterion is about an input that
+    is not there. The negation rule used to swallow these along with the next
+    sixty characters, which is exactly where the words that mark them live: a
+    task whose AC said «прогон без единой записи (журнал пуст)» was refused for
+    having no negative scenario at all.
+
+    The exception is the phrase the negation rule exists for: when what follows
+    names trouble rather than a missing thing ("without any errors"), the line
+    is promising an absence of problems, not describing one.
+    """
+    for match in _ABSENCE_PHRASE_RE.finditer(line):
+        tail = line[match.start(1) : match.end(1) + _LOOKAHEAD]
+        if not _PROBLEM_RE.search(tail):
+            return True
+    return False
+
+
 def has_negative_scenario(ac_text: str) -> bool:
     """True iff AC articulates at least one negative scenario.
 
-    Per-line scan: a line counts iff it contains a NEGATIVE_SCENARIO_KEYWORDS
-    keyword with word-boundary AND that keyword is NOT immediately preceded
-    by a negation phrase on the same line.
+    Per-line scan, three ways in: the line names a missing input outright
+    (empty, null, отсутствует), it describes one ("без ключей"), or it names a
+    problem that no negation cancels.
 
     Empty AC returns False (caller decides whether to error or warn).
     """
     if not ac_text:
         return False
     for line in _split_ac_into_criteria(ac_text):
-        stripped = _NEG_NEGATION_RE.sub(" ", line)
-        if _NEG_KW_RE.search(stripped):
+        if _ABSENCE_RE.search(line) or _absence_stated(line):
+            return True
+        if _PROBLEM_RE.search(_NEG_NEGATION_RE.sub(" ", line)):
             return True
     return False
