@@ -16,7 +16,18 @@ from pathlib import Path
 
 import pytest
 
-SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
+
+def _scripts_dir() -> Path:
+    """Hub keeps scripts/ at the root; a deployed project has .claude/scripts/."""
+    root = Path(__file__).resolve().parents[1]
+    for rel in ("scripts", ".claude/scripts"):
+        candidate = root / rel
+        if (candidate / "project.py").exists():
+            return candidate
+    return root / "scripts"
+
+
+SCRIPTS_DIR = _scripts_dir()
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from cli_push_ok import (  # noqa: E402

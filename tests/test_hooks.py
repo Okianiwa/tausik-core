@@ -9,7 +9,19 @@ import sys
 
 import pytest
 
-HOOKS_DIR = os.path.join(os.path.dirname(__file__), "..", "scripts", "hooks")
+
+def _hooks_dir() -> str:
+    """Hub layout keeps hooks in scripts/; a deployed project has them under
+    .claude/scripts/. The project's copy of this file must find them too."""
+    here = os.path.dirname(__file__)
+    for rel in (("..", "scripts", "hooks"), ("..", ".claude", "scripts", "hooks")):
+        candidate = os.path.join(here, *rel)
+        if os.path.isdir(candidate):
+            return candidate
+    return os.path.join(here, "..", "scripts", "hooks")
+
+
+HOOKS_DIR = _hooks_dir()
 
 
 def run_hook(
