@@ -21,7 +21,7 @@ import time
 
 import autoloop_quips as quips
 import autoloop_tui as tui
-from autoloop_journal import humanize
+from autoloop_journal import format_tokens, work_tokens
 from tausik_utils import tausik_config_path
 
 REFRESH_MS = 1000
@@ -93,7 +93,13 @@ def save_position(project_dir: str, x: int, y: int) -> bool:
 
 
 def overlay_lines(data: dict) -> list[str]:
-    """The three text lines beside the cat. Pure, so tests can read them."""
+    """The three text lines beside the cat. Pure, so tests can read them.
+
+    The two numbers on the last line answer different questions and have to
+    say so: `ctx` is how full the window is right now, `работа` is what the run
+    has produced since it started. Unlabelled and side by side they read as one
+    contradictory measurement — 40% next to millions of tokens.
+    """
     tokens = data["tokens"]
     done, active = len(data["tasks_done"]), len(data["tasks_active"])
     total = data["tasks_total"]
@@ -103,7 +109,7 @@ def overlay_lines(data: dict) -> list[str]:
         f"{tui.progress_bar(done, active, total, 10)}"
         f" {tui.progress_label(done, active, total)}"
         f"   ctx {tui.format_percent(data['percent'])}"
-        f"   {humanize(tokens['total'])} тк",
+        f"   работа {format_tokens(work_tokens(tokens))} тк",
     ]
 
 
@@ -141,10 +147,7 @@ def layout(cat, lines, quip, hint):
         "hint": (text_x, hint_y),
     }
     width = (
-        max(
-            [text_x + w for w, _ in lines]
-            + [PAD_X + quip[0], text_x + hint[0], PAD_X + cat[0]]
-        )
+        max([text_x + w for w, _ in lines] + [PAD_X + quip[0], text_x + hint[0], PAD_X + cat[0]])
         + PAD_X
     )
     return placement, (width, hint_y + hint[1] + PAD_Y)
@@ -159,8 +162,7 @@ def content_layout(cat, lines, quip, hint, fallback=DEFAULT_SIZE):
     """
     try:
         sizes = [
-            (int(w.winfo_reqwidth()), int(w.winfo_reqheight()))
-            for w in (cat, *lines, quip, hint)
+            (int(w.winfo_reqwidth()), int(w.winfo_reqheight())) for w in (cat, *lines, quip, hint)
         ]
     except Exception:  # noqa: BLE001 — font metrics vary by backend; an unmeasurable string falls back to the default size
         return None, fallback
@@ -232,9 +234,7 @@ def run_overlay(project_dir: str, config: dict | None = None) -> int:
     cat.place(x=PAD_X, y=PAD_Y)
 
     labels = []
-    for index, (font, colour) in enumerate(
-        [("Segoe UI", FG), ("Consolas", DIM), ("Consolas", FG)]
-    ):
+    for index, (font, colour) in enumerate([("Segoe UI", FG), ("Consolas", DIM), ("Consolas", FG)]):
         size = 10 if index else 11
         label = tk.Label(
             frame,
@@ -250,14 +250,10 @@ def run_overlay(project_dir: str, config: dict | None = None) -> int:
 
     # One line wide, no wrapping: the text is ellipsized to fit, so a long task
     # slug cannot push the layout around.
-    quip = tk.Label(
-        frame, text="", font=("Segoe UI", 9), fg="#9aa4b8", bg=BG, anchor="w"
-    )
+    quip = tk.Label(frame, text="", font=("Segoe UI", 9), fg="#9aa4b8", bg=BG, anchor="w")
     quip.place(x=12, y=108)
 
-    hint = tk.Label(
-        frame, text="перетащи · Esc закрыть", font=("Segoe UI", 7), fg="#4a5163", bg=BG
-    )
+    hint = tk.Label(frame, text="перетащи · Esc закрыть", font=("Segoe UI", 7), fg="#4a5163", bg=BG)
     hint.place(x=104, y=132)
 
     state = {"tick": 0, "drag": None, "size": DEFAULT_SIZE, "corner": (x, y)}
@@ -298,9 +294,7 @@ def run_overlay(project_dir: str, config: dict | None = None) -> int:
         for label, text in zip(labels, lines):
             label.config(text=text)
         labels[0].config(fg=_STATUS_COLOR.get(data["status"], FG))
-        if data["percent"] is not None and data["percent"] >= data.get(
-            "soft_threshold", 30
-        ):
+        if data["percent"] is not None and data["percent"] >= data.get("soft_threshold", 30):
             labels[2].config(fg=ACCENT)
         else:
             labels[2].config(fg=FG)
@@ -313,9 +307,7 @@ def run_overlay(project_dir: str, config: dict | None = None) -> int:
             status = tui.collect(project_dir, config)["status"]
         except Exception:  # noqa: BLE001 — an unreadable snapshot reads as idle rather than killing the tray loop
             status = tui.STATUS_IDLE
-        cat.config(
-            text=tui.cat_frame(status, state["tick"]), fg=_STATUS_COLOR.get(status, FG)
-        )
+        cat.config(text=tui.cat_frame(status, state["tick"]), fg=_STATUS_COLOR.get(status, FG))
         root.after(ANIMATE_MS, animate)
 
     def start_drag(event) -> None:

@@ -35,7 +35,10 @@ def test_lines_show_task_progress_context_and_tokens(project_dir, add_task):
 
     entry = journal.open_iteration(str(project_dir), 1, "busy", {})
     journal.close_iteration(
-        str(project_dir), entry, exit_reason="completed", tokens={"total": 84_000}
+        str(project_dir),
+        entry,
+        exit_reason="completed",
+        tokens={"output": 4_000, "cache_write": 20_000, "cache_read": 60_000, "total": 84_000},
     )
 
     lines = overlay_lines(make_data(project_dir))
@@ -44,7 +47,10 @@ def test_lines_show_task_progress_context_and_tokens(project_dir, add_task):
     assert "busy" in lines[1]
     assert "1/2" in lines[2]
     assert "31.0%" in lines[2]
-    assert "84.0k тк" in lines[2]
+    # Work done — 20k written plus 4k generated — not the 84k that counts the
+    # same context re-read on every request.
+    assert "работа 24.0k тк" in lines[2]
+    assert "84.0k" not in lines[2]
 
 
 def test_the_overlay_bar_shows_the_task_it_is_working_on(project_dir, add_task):
@@ -118,8 +124,7 @@ CONSOLAS_PX = 7.5  # advance width of Consolas 10pt at 96 dpi
 LINE_PX = 19  # its line height
 
 METRICS_LINE = (
-    f"{tui.progress_bar(6, 1, 13, 10)} {tui.progress_label(6, 1, 13)}"
-    "   ctx 24.0%   1.24M тк"
+    f"{tui.progress_bar(6, 1, 13, 10)} {tui.progress_label(6, 1, 13)}   ctx 24.0%   1.24M тк"
 )
 
 
@@ -278,9 +283,7 @@ def test_a_broken_root_yields_a_size_instead_of_an_exception():
 
 
 def test_a_root_that_refuses_to_resize_keeps_the_old_size():
-    assert overlay.apply_size(
-        FakeRoot(refuses=True), (500, 220), (10, 20), (330, 156)
-    ) == (
+    assert overlay.apply_size(FakeRoot(refuses=True), (500, 220), (10, 20), (330, 156)) == (
         330,
         156,
     )
@@ -306,9 +309,7 @@ def test_saving_position_keeps_the_rest_of_the_config(project_dir):
 
     save_position(str(project_dir), 10, 20)
 
-    raw = json.loads(
-        (project_dir / ".tausik" / "config.json").read_text(encoding="utf-8")
-    )
+    raw = json.loads((project_dir / ".tausik" / "config.json").read_text(encoding="utf-8"))
     assert raw["autoloop"]["soft_threshold"] == 45
     assert raw["rag"]["mode"] == "fts5"
 

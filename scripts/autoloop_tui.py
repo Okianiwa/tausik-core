@@ -291,14 +291,12 @@ def render_text(data: dict) -> str:
         cat_frame(data["status"], 0),
         f"autoloop · {data['caption']}",
         f"задача:   {data['current_task'] or '—'}",
-        f"задачи    {progress_bar(done, active, total)}"
-        f"  {progress_label(done, active, total)}",
+        f"задачи    {progress_bar(done, active, total)}  {progress_label(done, active, total)}",
         f"контекст  {bar((data['percent'] or 0) / 100)}  {format_percent(data['percent'])}"
         f"  (порог {int(data['soft_threshold'])}%)",
-        f"токены    {journal.humanize(tokens['total'])}"
-        f"  (вход {journal.humanize(tokens['input'])}"
-        f" · выход {journal.humanize(tokens['output'])}"
-        f" · кэш {journal.humanize(tokens['cache_read'])})",
+        f"работа    {journal.format_tokens(journal.work_tokens(tokens))} за прогон"
+        f"  (выход {journal.format_tokens(tokens['output'])}"
+        f" · запись кэша {journal.format_tokens(tokens['cache_write'])})",
         f"время     {format_elapsed(data['elapsed_seconds'])} · ${data['cost_usd']:.2f}",
     ]
     if data["tasks_queued"]:

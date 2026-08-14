@@ -83,9 +83,7 @@ def read_events(project_dir: str, event: str | None = None) -> list[dict]:
     return events
 
 
-def open_iteration(
-    project_dir: str, iteration: int, task_slug: str, status_before: dict
-) -> dict:
+def open_iteration(project_dir: str, iteration: int, task_slug: str, status_before: dict) -> dict:
     """Record the start of an iteration. The returned dict is closed later."""
     entry = {
         "iteration": iteration,
@@ -202,9 +200,7 @@ def summarize(project_dir: str) -> dict:
         "crashed": crashed,
         "failed": failed,
         "session_violations": [
-            e
-            for e in read_events(project_dir)
-            if e.get(EVENT_KEY) in SESSION_VIOLATIONS
+            e for e in read_events(project_dir) if e.get(EVENT_KEY) in SESSION_VIOLATIONS
         ],
         "cost_usd": round(sum(float(e.get("cost_usd") or 0) for e in entries), 4),
         "tokens": sum_tokens(entries),
@@ -218,17 +214,39 @@ TOKEN_KEYS = ("input", "output", "cache_read", "cache_write", "total")
 
 def sum_tokens(entries: list[dict]) -> dict:
     """Add up per-iteration token counts, tolerating entries written before
-    tokens were journalled at all."""
-    totals = dict.fromkeys(TOKEN_KEYS, 0)
+    tokens were journalled at all.
+
+    A key nobody ever reported comes back as None, not as 0. The difference is
+    the whole point: a run that generated nothing and a run whose iterations
+    predate token journalling look identical once both are called zero, and the
+    screen would state a measurement it never took.
+    """
+    totals = dict.fromkeys(TOKEN_KEYS, None)
     for entry in entries:
         tokens = entry.get("tokens")
         if not isinstance(tokens, dict):
             continue
         for key in TOKEN_KEYS:
             value = tokens.get(key)
-            if isinstance(value, (int, float)):
-                totals[key] += int(value)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                totals[key] = (totals[key] or 0) + int(value)
     return totals
+
+
+def work_tokens(tokens: dict) -> int | None:
+    """How much work a run did: what it read for the first time plus what it
+    wrote. None when neither was ever measured.
+
+    Deliberately not `total`. On a long run `cache_read` is 98% of that sum —
+    the same context handed back on every request — so the figure climbs into
+    the millions while the window beside it sits at 40%, and the two numbers
+    read as a contradiction. Re-reading a cache is not work done.
+    """
+    if not isinstance(tokens, dict):
+        return None
+    parts = [tokens.get("cache_write"), tokens.get("output")]
+    measured = [int(v) for v in parts if isinstance(v, (int, float)) and not isinstance(v, bool)]
+    return sum(measured) if measured else None
 
 
 def describe_violation(event: dict) -> str:
@@ -256,17 +274,28 @@ def humanize(count: int) -> str:
     return str(count)
 
 
+def format_tokens(count) -> str:
+    """A count, or an em dash where there is no measurement — the same answer
+    the context percentage already gives for a window it could not read."""
+    return "—" if count is None else humanize(count)
+
+
 def format_report(project_dir: str) -> str:
     summary = summarize(project_dir)
     if not summary["iterations"]:
         return "[autoloop] прогонов не было — журнал пуст"
 
+    # The place the full breakdown lives. The screens show work done and
+    # nothing else; here there is room to say what that number is made of and
+    # what the cache re-reads cost on top of it.
     tokens = summary["tokens"]
     lines = [
         f"[autoloop] итераций: {summary['iterations']}, "
-        f"токенов: {humanize(tokens['total'])} "
-        f"(вход {humanize(tokens['input'])} · выход {humanize(tokens['output'])} · "
-        f"кэш {humanize(tokens['cache_read'])})",
+        f"работа: {format_tokens(work_tokens(tokens))} "
+        f"(вход {format_tokens(tokens['input'])} · выход {format_tokens(tokens['output'])} · "
+        f"запись кэша {format_tokens(tokens['cache_write'])} · "
+        f"чтение кэша {format_tokens(tokens['cache_read'])} · "
+        f"всего {format_tokens(tokens['total'])})",
         f"  стоимость: ${summary['cost_usd']:.4f}",
     ]
     if summary["tasks_done"]:

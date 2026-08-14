@@ -66,9 +66,7 @@ def run_dashboard(project_dir: str, config: dict | None = None) -> int:
         def refresh_data(self) -> None:
             self.tick += 1
             data = tui.collect(project_dir, config)
-            self.query_one("#cat", Static).update(
-                tui.cat_frame(data["status"], self.tick)
-            )
+            self.query_one("#cat", Static).update(tui.cat_frame(data["status"], self.tick))
             self.query_one("#body", Static).update(body_markup(data))
             self.query_one("#detail", Static).update(
                 detail_markup(data) if self.show_detail else "d — подробности прогона"
@@ -93,10 +91,9 @@ def body_markup(data: dict) -> str:
         f"[dim]контекст[/dim] {'[yellow]' if over else ''}{tui.bar((percent or 0) / 100)}"
         f"  {tui.format_percent(percent)}{'[/yellow]' if over else ''}"
         f" [dim](порог {int(data['soft_threshold'])}%)[/dim]\n"
-        f"[dim]токены[/dim]   [b]{journal.humanize(tokens['total'])}[/b]"
-        f" [dim]вход {journal.humanize(tokens['input'])}"
-        f" · выход {journal.humanize(tokens['output'])}"
-        f" · кэш {journal.humanize(tokens['cache_read'])}[/dim]\n"
+        f"[dim]работа[/dim]   [b]{journal.format_tokens(journal.work_tokens(tokens))}[/b]"
+        f" [dim]за прогон · выход {journal.format_tokens(tokens['output'])}"
+        f" · запись кэша {journal.format_tokens(tokens['cache_write'])}[/dim]\n"
         f"[dim]время[/dim]    {tui.format_elapsed(data['elapsed_seconds'])}"
         f" [dim]· ${data['cost_usd']:.2f}[/dim]"
     )

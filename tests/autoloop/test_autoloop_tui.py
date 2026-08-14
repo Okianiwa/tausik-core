@@ -31,12 +31,8 @@ SESSION = "sess-1"
 
 
 def make_entry(project_dir, iteration=1, slug="task-a", **close):
-    entry = journal.open_iteration(
-        str(project_dir), iteration, slug, {slug: "planning"}
-    )
-    return journal.close_iteration(
-        str(project_dir), entry, **{"exit_reason": "completed", **close}
-    )
+    entry = journal.open_iteration(str(project_dir), iteration, slug, {slug: "planning"})
+    return journal.close_iteration(str(project_dir), entry, **{"exit_reason": "completed", **close})
 
 
 def mark_running(project_dir):
@@ -53,7 +49,9 @@ def test_no_journal_and_no_run_reads_as_not_started(project_dir):
     assert data["status"] == STATUS_STOPPED
     assert data["caption"] == "прогон не запущен"
     assert data["percent"] is None
-    assert data["tokens"]["total"] == 0
+    # AC negative: a run with no entries has no token measurement, and None is
+    # how that is said. Zero would be a claim — that the run produced nothing.
+    assert data["tokens"]["total"] is None
 
 
 def test_run_marker_means_running(project_dir):
@@ -100,9 +98,7 @@ def test_a_foreign_json_next_to_a_reading_is_not_read_as_one(project_dir):
     directory, newer than the real measurement, must not become the reading."""
     write_state(project_dir, SESSION, {"percent": 42.0})
     intruder = project_dir / ".tausik" / "autoloop" / "settings.git-off.json"
-    intruder.write_text(
-        json.dumps({"permissions": {"allow": [], "deny": []}}), encoding="utf-8"
-    )
+    intruder.write_text(json.dumps({"permissions": {"allow": [], "deny": []}}), encoding="utf-8")
     reading = project_dir / ".tausik" / "autoloop" / f"{SESSION}.json"
     older = os.path.getmtime(intruder) - 60
     os.utime(reading, (older, older))  # profile is the freshest file on disk
@@ -345,9 +341,7 @@ def test_humanize_token_counts(count, expected):
     assert humanize(count) == expected
 
 
-@pytest.mark.parametrize(
-    "seconds,expected", [(0, "0м 00с"), (95, "1м 35с"), (7300, "2ч 01м")]
-)
+@pytest.mark.parametrize("seconds,expected", [(0, "0м 00с"), (95, "1м 35с"), (7300, "2ч 01м")])
 def test_format_elapsed(seconds, expected):
     assert format_elapsed(seconds) == expected
 
@@ -374,7 +368,13 @@ def test_text_rendering_holds_the_essentials(project_dir, add_task):
     mark_running(project_dir)
     make_entry(
         project_dir,
-        tokens={"input": 1_000, "output": 500, "cache_read": 20_000, "total": 21_500},
+        tokens={
+            "input": 1_000,
+            "output": 500,
+            "cache_read": 20_000,
+            "cache_write": 8_000,
+            "total": 29_500,
+        },
     )
     write_state(project_dir, SESSION, {"percent": 31.0})
 
@@ -382,7 +382,9 @@ def test_text_rendering_holds_the_essentials(project_dir, add_task):
 
     assert "task-a" in text
     assert "31.0%" in text
-    assert "21.5k" in text
+    # Work done, not the sum of cache re-reads: 8000 written + 500 generated.
+    assert "8.5k" in text
+    assert "29.5k" not in text
     assert "порог 30%" in text
 
 
@@ -423,9 +425,7 @@ def test_dashboard_is_read_only(project_dir):
             '"w"',
             "'w'",
         ):
-            assert forbidden not in source, (
-                f"{module.__name__} не должен использовать {forbidden}"
-            )
+            assert forbidden not in source, f"{module.__name__} не должен использовать {forbidden}"
 
     # sqlite is opened read-only, so even a stray UPDATE could not land.
     assert "mode=ro" in inspect.getsource(tui)

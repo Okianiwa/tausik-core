@@ -184,3 +184,80 @@ def test_corrupt_lines_are_skipped_not_fatal(project_dir):
     records = read_entries(str(project_dir))
 
     assert [r["iteration"] for r in records] == [5]
+
+
+# --- work done, as opposed to cache re-read ---------------------------------
+
+
+def test_work_is_what_was_written_plus_what_was_generated():
+    """The figure the screens show. `total` counts `cache_read` — the same
+    context handed back on every request — and on a long run that is 98% of it,
+    so the number climbed into the millions beside a window at 40%."""
+    tokens = {
+        "input": 1_000,
+        "output": 4_000,
+        "cache_write": 20_000,
+        "cache_read": 900_000,
+        "total": 925_000,
+    }
+
+    assert journal.work_tokens(tokens) == 24_000
+
+
+def test_an_unmeasured_run_is_a_dash_not_a_zero():
+    """AC negative: entries written before tokens were journalled must not be
+    reported as a run that produced nothing."""
+    assert journal.work_tokens({"input": 500, "total": 500}) is None
+    assert journal.work_tokens({"cache_write": None, "output": None}) is None
+    assert journal.work_tokens({}) is None
+    assert journal.work_tokens(None) is None
+    assert journal.format_tokens(journal.work_tokens({})) == "—"
+
+
+def test_an_empty_journal_measures_nothing(project_dir):
+    """AC negative: no entries at all — a dash, not 0 тк, and no arithmetic on
+    None along the way."""
+    tokens = summarize(str(project_dir))["tokens"]
+
+    assert tokens["total"] is None
+    assert journal.work_tokens(tokens) is None
+    assert journal.format_tokens(journal.work_tokens(tokens)) == "—"
+
+
+def test_half_a_measurement_still_counts():
+    """One of the two parts missing is not a reason to refuse the other: a run
+    that wrote no cache still generated output."""
+    assert journal.work_tokens({"output": 700}) == 700
+    assert journal.work_tokens({"cache_write": 300}) == 300
+
+
+def test_real_work_under_a_thousand_is_not_rounded_away():
+    """AC negative: `0.0k` for 900 tokens reads as nothing happened."""
+    assert journal.format_tokens(900) == "900"
+    assert journal.format_tokens(0) == "0"
+    assert journal.format_tokens(1_500) == "1.5k"
+
+
+def test_the_full_breakdown_stays_in_the_report(project_dir):
+    """AC: the screens show one number; this is where the rest of them live."""
+    entry = open_iteration(str(project_dir), 1, "task-a", {})
+    close_iteration(
+        str(project_dir),
+        entry,
+        exit_reason="completed",
+        tokens={
+            "input": 1_000,
+            "output": 4_000,
+            "cache_write": 20_000,
+            "cache_read": 900_000,
+            "total": 925_000,
+        },
+    )
+
+    report = format_report(str(project_dir))
+
+    assert "работа: 24.0k" in report
+    assert "запись кэша 20.0k" in report
+    assert "чтение кэша 900.0k" in report
+    assert "всего 925.0k" in report
+    assert "выход 4.0k" in report
