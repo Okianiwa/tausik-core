@@ -222,3 +222,62 @@ def test_a_screen_nobody_could_read_is_not_an_objection():
     assert cycle.draft_changed(None, "> черновик") is False
     assert cycle.draft_changed("> черновик", None) is False
     assert cycle.draft_changed(None, None) is False
+
+
+# --- the step that hands the work back --------------------------------------
+
+
+def test_the_cycle_ends_by_returning_the_chat_to_work():
+    """Without it the cycle stops on /start: context clean, session open, and
+    the chat waiting for a human who said they were leaving."""
+    steps = cycle.sequence(direction="очередь задач")
+
+    assert [command for command, _ in steps][:3] == ["/checkpoint", "/clear", "/start"]
+    assert steps[-1][1] == cycle.WAIT_SPEAKING
+    assert "очередь задач" in steps[-1][0]
+
+
+def test_the_direction_travels_in_the_text():
+    """After the wipe nothing else remembers what the work was about."""
+    steps = cycle.sequence(direction="почини вёрстку на главной")
+
+    assert "почини вёрстку на главной" in steps[-1][0]
+
+
+def test_without_a_direction_the_chat_is_not_told_anything():
+    """AC negative: no direction is no run — a command into the void would put
+    a cleaned chat to work on nothing in particular."""
+    steps = cycle.sequence()
+
+    assert [command for command, _ in steps] == ["/checkpoint", "/clear", "/start"]
+
+
+def test_a_spent_session_still_ends_on_the_continuation():
+    """/end belongs before the wipe; the continuation after the new session."""
+    steps = cycle.sequence(close_session=True, direction="очередь задач")
+
+    assert [command for command, _ in steps][:4] == [
+        "/checkpoint",
+        "/end",
+        "/clear",
+        "/start",
+    ]
+    assert steps[-1][1] == cycle.WAIT_SPEAKING
+
+
+def test_a_chat_that_started_answering_counts_as_delivered(project_dir, monkeypatch):
+    """The work runs for as long as it takes; "it started" is the only answer
+    this step can be given."""
+    sizes = iter([10, 10, 4096])
+    monkeypatch.setattr("autoloop_presence.transcript_size", lambda *_a, **_k: next(sizes))
+
+    assert cycle.wait_speaking(str(project_dir), baseline=10, sleep=lambda _s: None) is True
+
+
+def test_a_chat_that_never_answers_is_not_delivered(project_dir, monkeypatch):
+    """AC negative: a command typed into a console that stopped reading must
+    not be reported as done."""
+    monkeypatch.setattr("autoloop_presence.transcript_size", lambda *_a, **_k: 10)
+    monkeypatch.setattr(cycle.time, "monotonic", iter([0.0, 1.0, 999.0]).__next__)
+
+    assert cycle.wait_speaking(str(project_dir), baseline=10, sleep=lambda _s: None) is False

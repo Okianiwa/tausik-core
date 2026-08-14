@@ -505,3 +505,55 @@ def test_a_watcher_leaves_when_the_run_is_taken_away(project_dir, monkeypatch):
     journal = (project_dir / ".tausik" / "chat-watch.log").read_text(encoding="utf-8")
     assert ran == []
     assert "прогон снят" in journal
+
+
+# --- handing the work back --------------------------------------------------
+
+
+def test_the_continuation_is_typed_once_and_never_repeated(project_dir, keyboard, monkeypatch):
+    """AC negative: this step starts work that runs for as long as the work
+    takes. A retry would land Esc and a duplicate command on an agent mid-edit
+    — the retry that protects the other steps is the worst thing that could
+    happen to this one."""
+    monkeypatch.setattr(watch, "confirm", lambda *_a, **_k: False)
+
+    watch.deliver(
+        str(project_dir), 111, "Продолжай прогон. Направление: очередь", watch.WAIT_SPEAKING
+    )
+
+    assert keyboard.typed.count("Продолжай прогон. Направление: очередь") == 1
+    assert keyboard.typed.count(watch.ESC) == 1
+
+
+def test_the_other_steps_keep_their_retries(project_dir, keyboard, monkeypatch):
+    """Right after `/clear` the chat reads nothing; one retry is the difference
+    between a finished cycle and a silent stall."""
+    monkeypatch.setattr(watch, "confirm", lambda *_a, **_k: False)
+
+    watch.deliver(str(project_dir), 111, "/checkpoint", cycle_state.WAIT_TURN)
+
+    assert keyboard.typed.count("/checkpoint") == watch.DELIVERY_ATTEMPTS
+
+
+def test_the_cycle_hands_the_work_back_when_a_run_is_declared(project_dir, keyboard):
+    cycle_state.start_run(str(project_dir), "разгреби очередь")
+
+    watch.run_sequence(str(project_dir), 111, watch.Maintenance())
+
+    assert keyboard.typed[-1] == "Продолжай прогон. Направление: разгреби очередь"
+
+
+def test_a_delivery_is_measured_against_the_transcript_before_typing(
+    project_dir, keyboard, monkeypatch
+):
+    """ "It answered" means it grew past what it held when the command went in —
+    measured before the keys, or the growth being waited on is already there."""
+    seen = []
+    monkeypatch.setattr(watch, "transcript_size", lambda *_a, **_k: seen.append("measured") or 7)
+    monkeypatch.setattr(
+        watch, "confirm", lambda *_a, baseline=0, **_k: seen.append(baseline) is None
+    )
+
+    watch.deliver(str(project_dir), 111, "Продолжай", watch.WAIT_SPEAKING)
+
+    assert seen == ["measured", 7]

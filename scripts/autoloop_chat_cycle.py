@@ -94,6 +94,11 @@ def end_run(project_dir: str) -> None:
 # `/clear` (dead end #19).
 WAIT_TURN = "turn"  # Stop hook — a model turn finished
 WAIT_SESSION = "session"  # SessionStart hook — the chat came back up
+# The fourth step starts work that runs for as long as the work takes. Waiting
+# for the turn to end would call it undelivered after four minutes and type it
+# again — Esc first — straight over an agent mid-edit. "It started" is the only
+# answer this step can be given, and the transcript growing is what says so.
+WAIT_SPEAKING = "speaking"
 
 SEQUENCE = (
     ("/checkpoint", WAIT_TURN),
@@ -106,21 +111,35 @@ SEQUENCE = (
 END_STEP = ("/end", WAIT_TURN)
 
 
-def sequence(close_session: bool = False):
+def continue_step(direction: str):
+    """The step that hands the chat back its work.
+
+    Without it the cycle ends on `/start`: context clean, session open, and the
+    chat sitting there waiting for a human who said they were leaving. The
+    direction travels in the text itself — after the wipe there is nothing left
+    that remembers what the work was about.
+    """
+    return (f"Продолжай прогон. Направление: {direction}", WAIT_SPEAKING)
+
+
+def sequence(close_session: bool = False, direction: str = ""):
     """The commands to type, in order.
 
     `/end` goes after the checkpoint and before the wipe: the handoff has to be
-    written while the conversation it summarises still exists.
+    written while the conversation it summarises still exists. The continuation
+    goes last, once the fresh session has finished reading itself in.
     """
-    if not close_session:
-        return SEQUENCE
-    return SEQUENCE[:1] + (END_STEP,) + SEQUENCE[1:]
+    steps = SEQUENCE if not close_session else SEQUENCE[:1] + (END_STEP,) + SEQUENCE[1:]
+    return steps + (continue_step(direction),) if direction else steps
 
 
 ARM_SECONDS = 15.0
 READY_TIMEOUT = 240.0
 SESSION_TIMEOUT = 90.0
 SETTLE_AFTER_SESSION = 3.0  # the flag means "started", not "finished drawing"
+SPEAKING_TIMEOUT = (
+    90.0  # long enough for a fresh session to think, short enough to notice a dead command
+)
 KEY_SETTLE = 0.3  # between Esc and the command, so they are not read as one
 DELIVERY_ATTEMPTS = 3
 CANCEL_QUIET = 600.0  # how long a refusal holds before offering again
@@ -181,7 +200,26 @@ def _wait_flag(path: str, timeout: float, sleep=time.sleep) -> bool:
     return False
 
 
-def confirm(project_dir: str, trace: str, sleep=time.sleep) -> bool:
+def wait_speaking(
+    project_dir: str, baseline: int, timeout=SPEAKING_TIMEOUT, sleep=time.sleep
+) -> bool:
+    """Block until the chat starts answering — its transcript outgrows what it
+    was when the command went in.
+
+    Deliberately not "the turn ended": the work this step starts is the point,
+    and it takes as long as it takes.
+    """
+    from autoloop_presence import transcript_size
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if transcript_size(project_dir) > baseline:
+            return True
+        sleep(0.5)
+    return False
+
+
+def confirm(project_dir: str, trace: str, sleep=time.sleep, baseline: int = 0) -> bool:
     """Did the command actually run? Nothing else here knows.
 
     Writing into a console buffer succeeds whether or not the chat is reading
@@ -195,6 +233,8 @@ def confirm(project_dir: str, trace: str, sleep=time.sleep) -> bool:
             return False
         sleep(SETTLE_AFTER_SESSION)
         return True
+    if trace == WAIT_SPEAKING:
+        return wait_speaking(project_dir, baseline, sleep=sleep)
     return True
 
 

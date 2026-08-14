@@ -83,6 +83,22 @@ def transcript_path(project_dir: str, known: str | None = None):
     return current_session(project_dir) or known or newest_transcript(transcript_dir(project_dir))
 
 
+def transcript_size(project_dir: str, known: str | None = None) -> int:
+    """How much this session's log holds right now, or 0 when it cannot be read.
+
+    The one signal that says "the chat took the command and started working"
+    without waiting for it to finish. A turn can run for an hour; this moves
+    within seconds of the first token.
+    """
+    path = transcript_path(project_dir, known)
+    if not path:
+        return 0
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
 def idle_seconds(path, now=None):
     """How long the conversation has been quiet, or None for "no idea".
 

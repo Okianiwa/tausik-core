@@ -24,7 +24,7 @@ import sys
 import time
 
 import autoloop_keys as keys
-from autoloop_presence import idle_seconds, transcript_path
+from autoloop_presence import idle_seconds, transcript_path, transcript_size
 from tausik_utils import tausik_config_path
 from autoloop_chat_cycle import (
     ARM_SECONDS,
@@ -34,9 +34,11 @@ from autoloop_chat_cycle import (
     clear_ready,
     clear_started,
     confirm,
+    WAIT_SPEAKING,
     draft_changed,
     needs_maintenance,
     run_declared,
+    run_direction,
     sequence,
     wait_ready,
 )
@@ -117,11 +119,21 @@ def deliver(project_dir: str, pid: int, command: str, trace: str):
     Retries because a console that accepts the keys may not be reading them:
     right after `/clear` the chat is rebuilding itself, and a write that
     "succeeded" landed nowhere. Without a retry that loss is silent.
+
+    The continuation step is the exception and gets exactly one attempt. It
+    starts work that runs for as long as the work takes, so a second attempt
+    would land Esc and a duplicate command on an agent mid-edit — the retry
+    that protects the other steps is the worst thing that could happen to this
+    one.
     """
-    for attempt in range(1, DELIVERY_ATTEMPTS + 1):
+    attempts = 1 if trace == WAIT_SPEAKING else DELIVERY_ATTEMPTS
+    for attempt in range(1, attempts + 1):
         # Stale marks answer for the command that has not run yet.
         clear_ready(project_dir)
         clear_started(project_dir)
+        # Measured before typing: "the chat answered" means it grew past what
+        # it held when the command went in.
+        baseline = transcript_size(project_dir)
         # Esc first: the command must not glue itself onto a half-typed draft,
         # then a pause, or the console reads the two writes as one keystroke.
         keys.send_to_console(pid, ESC, submit=False)
@@ -129,12 +141,9 @@ def deliver(project_dir: str, pid: int, command: str, trace: str):
         sent, reason = keys.send_to_console(pid, command)
         if not sent:
             return False, reason
-        if confirm(project_dir, trace):
+        if confirm(project_dir, trace, baseline=baseline):
             return True, ""
-        log(
-            project_dir,
-            f"{command}: следа нет, попытка {attempt} из {DELIVERY_ATTEMPTS}",
-        )
+        log(project_dir, f"{command}: следа нет, попытка {attempt} из {attempts}")
     return False, "чат не отозвался — команда не выполнилась"
 
 
@@ -186,7 +195,7 @@ def session_spent(project_dir: str):
 def run_sequence(project_dir: str, pid: int, cycle: Maintenance) -> bool:
     """Type the commands, each confirmed before the next one goes."""
     spent = session_spent(project_dir)
-    steps = sequence(bool(spent))
+    steps = sequence(bool(spent), run_direction(project_dir))
     if spent:
         log(project_dir, f"сессия исчерпана ({spent}) — в цикл добавлен /end")
     if not wait_ready(project_dir, cycle.ready_timeout):
