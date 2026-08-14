@@ -38,7 +38,20 @@ def per_tier_metrics(q: QueryFn) -> dict[str, dict[str, Any]]:
 def session_capacity_summary(
     q: QueryFn, q1: Callable[..., dict[str, Any] | None], capacity: int
 ) -> dict[str, Any]:
-    """Per-session tool-call accounting: used, planned, remaining."""
+    """Per-session tool-call accounting: used, planned, remaining.
+
+    `used` counts the events of tasks CLOSED in this session, but only those
+    events that fall inside the session window. Summing `call_actual` instead
+    charged the session for the task's whole biography: call_actual spans the
+    task's own window (started_at..completed_at), which for a task carried
+    across days covers every session it lived through. Closing one such task
+    put 705 calls into a 27-minute session against a ceiling of 200, and the
+    capacity gate then refused to start anything — twice, in real sessions.
+
+    Active tasks stay out of `used` on purpose: they are already accounted
+    for by `planned_active` (their reserved budget), so counting their events
+    here would charge the same work twice.
+    """
     sess = q1("SELECT id, started_at FROM sessions WHERE ended_at IS NULL ORDER BY id DESC LIMIT 1")
     if not sess:
         return {
@@ -49,9 +62,17 @@ def session_capacity_summary(
             "remaining": capacity,
         }
     used_row = q1(
-        "SELECT COALESCE(SUM(call_actual),0) AS used FROM tasks "
-        "WHERE status='done' AND call_actual IS NOT NULL AND completed_at >= ?",
-        (sess["started_at"],),
+        "SELECT COUNT(*) AS used FROM events e "
+        "JOIN tasks t ON t.slug = e.entity_id "
+        "WHERE e.entity_type='task' AND t.status='done' "
+        "AND t.completed_at >= ? "
+        "AND julianday(e.created_at) >= julianday(?) "
+        # An unattended run leaves its events in the human's session — an
+        # iteration never opens one of its own. Counted, a night of autonomous
+        # work would burn the human's capacity, the same way it used to burn
+        # the 180 minutes of Rule 9.2 (see backend_session_metrics).
+        "AND (e.actor IS NULL OR e.actor <> 'autoloop')",
+        (sess["started_at"], sess["started_at"]),
     )
     planned_row = q1(
         "SELECT COALESCE(SUM(call_budget),0) AS planned FROM tasks "
