@@ -413,6 +413,22 @@ class TestInterpreterPayloadFlagMatch:
         assert r.returncode == 0
 
 
+def _cwd_is_a_repo() -> bool:
+    try:
+        subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL, encoding="utf-8"
+        )
+    except (subprocess.CalledProcessError, OSError):
+        return False
+    return True
+
+
+@pytest.mark.skipif(
+    not _cwd_is_a_repo(),
+    reason="these cases pin the ticket against the CWD's HEAD; a deployed "
+    "project need not be a repository — TestPushTicketAcrossRepositories "
+    "covers the same ground on repositories it creates itself",
+)
 class TestGitPushGate:
     """git_push_gate.py blocks direct git push without a valid push ticket.
 
