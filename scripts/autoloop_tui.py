@@ -223,6 +223,13 @@ def collect(project_dir: str, config: dict | None = None) -> dict:
     # Same shape, no numbers: an unmeasured count already renders as an em
     # dash, so the window says "not measured" rather than a confident zero.
     unmeasured = dict.fromkeys(("input", "output", "cache_read", "cache_write", "total"))
+    # Read the fill now rather than take the last stored reading: that one is
+    # written when a turn ends, and a turn can run for an hour while the window
+    # keeps filling. The stored reading stays as the fallback, and only it
+    # carries an age — a figure read a moment ago needs no caveat.
+    now_percent = run_state.live_percent(project_dir) if chat else None
+    percent = now_percent if now_percent is not None else state.get("percent")
+    reading_age = None if now_percent is not None else state.get("age_seconds")
     return {
         "mode": mode,
         "status": status,
@@ -236,8 +243,8 @@ def collect(project_dir: str, config: dict | None = None) -> dict:
         else (last.get("iteration") or 0)
         if live
         else 0,
-        "percent": state.get("percent"),
-        "reading_age_seconds": state.get("age_seconds"),
+        "percent": percent,
+        "reading_age_seconds": reading_age,
         "soft_threshold": config.get("soft_threshold", 30),
         "tokens": summary["tokens"] if from_journal else unmeasured,
         "cost_usd": summary["cost_usd"] if from_journal else None,

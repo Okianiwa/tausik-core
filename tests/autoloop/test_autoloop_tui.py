@@ -563,3 +563,91 @@ class TestBothModesAreVisible:
         declare_chat_run(project_dir)
         text = render_text(collect(str(project_dir)))
         assert "—" in text
+
+
+# --- the fill is read now, not when the last turn ended --------------------
+
+
+def write_transcript(project_dir, tokens, name="live.jsonl"):
+    """A transcript the sensor's reader accepts: one assistant message whose
+    usage adds up to `tokens`."""
+    path = project_dir / name
+    entry = {
+        "type": "assistant",
+        "message": {"model": "claude-opus-5", "usage": {"input_tokens": tokens}},
+    }
+    path.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+    (project_dir / ".tausik" / ".chat.session").write_text(str(path), encoding="utf-8")
+    return path
+
+
+class TestTheFillIsReadNow:
+    """The stored reading is written when a turn ends. A turn can run for an
+    hour while the window keeps filling, so the window showed 39.6% against a
+    conversation actually sitting at 47.9%."""
+
+    def test_the_transcript_wins_over_the_stored_reading(self, project_dir):
+        declare_chat_run(project_dir)
+        write_state(str(project_dir), SESSION, {"percent": 39.6, "tokens": 396428})
+        write_transcript(project_dir, 479_222)
+        data = collect(str(project_dir))
+        assert data["percent"] == 47.9
+        assert data["reading_age_seconds"] is None, "a figure read now needs no caveat"
+
+    def test_a_reading_taken_now_carries_no_age_in_the_text(self, project_dir):
+        declare_chat_run(project_dir)
+        write_state(str(project_dir), SESSION, {"percent": 39.6, "tokens": 396428})
+        write_transcript(project_dir, 479_222)
+        assert "назад" not in render_text(collect(str(project_dir)))
+
+    def test_an_unreadable_transcript_falls_back_to_the_stored_reading(self, project_dir):
+        """NEGATIVE: the window keeps answering from what it has."""
+        declare_chat_run(project_dir)
+        write_state(str(project_dir), SESSION, {"percent": 39.6, "tokens": 396428})
+        (project_dir / ".tausik" / ".chat.session").write_text(
+            str(project_dir / "gone.jsonl"), encoding="utf-8"
+        )
+        assert collect(str(project_dir))["percent"] == 39.6
+
+    def test_a_transcript_without_usage_is_not_a_zero(self, project_dir):
+        """NEGATIVE: a fresh session has no usage yet — that is 'unknown', and
+        with no stored reading either the answer stays empty."""
+        declare_chat_run(project_dir)
+        path = project_dir / "empty.jsonl"
+        path.write_text(json.dumps({"type": "user", "message": {}}) + "\n", encoding="utf-8")
+        (project_dir / ".tausik" / ".chat.session").write_text(str(path), encoding="utf-8")
+        assert collect(str(project_dir))["percent"] is None
+
+    def test_agents_mode_keeps_its_own_source(self, project_dir):
+        """NEGATIVE: the transcript belongs to the conversation, not to a run
+        of separate processes — agents mode must not start reading it."""
+        mark_running(project_dir)
+        make_entry(project_dir)
+        write_state(str(project_dir), SESSION, {"percent": 12.0, "tokens": 120})
+        write_transcript(project_dir, 999_000)
+        assert collect(str(project_dir))["percent"] == 12.0
+
+    def test_an_unchanged_transcript_is_not_re_read(self, project_dir):
+        """The window repaints about once a second; the transcript changes only
+        when the conversation does."""
+        import autoloop_run_state as rs
+        from autoloop import context as ctx
+
+        declare_chat_run(project_dir)
+        write_transcript(project_dir, 100_000)
+        rs._live_percent_cache.clear()
+        calls = []
+        real = ctx.read_context_usage
+
+        def counting(path):
+            calls.append(path)
+            return real(path)
+
+        ctx.read_context_usage = counting
+        try:
+            first = rs.live_percent(str(project_dir))
+            second = rs.live_percent(str(project_dir))
+        finally:
+            ctx.read_context_usage = real
+        assert first == second == 10.0
+        assert len(calls) == 1, f"transcript read {len(calls)} times for two repaints"
