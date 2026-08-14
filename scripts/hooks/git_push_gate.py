@@ -137,6 +137,20 @@ def _find_tausik_dir(start: Path | None = None) -> Path | None:
     return None
 
 
+def _as_local_path(raw: str) -> Path:
+    """Interpret a shell path the way the shell that ran it would.
+
+    Git Bash spells drives as `/d/repo`; Python on Windows reads that as
+    `\\d\\repo` on the current drive and finds nothing — the gate then fell
+    back to the session directory and refused a legitimate push. Only the
+    `/<letter>/…` shape is rewritten, and only on Windows, where it cannot
+    collide with a real absolute path.
+    """
+    if os.name == "nt" and len(raw) > 2 and raw[0] == "/" and raw[2] == "/" and raw[1].isalpha():
+        return Path(f"{raw[1]}:/{raw[3:]}")
+    return Path(raw)
+
+
 def _command_target_dir(command: str) -> Path | None:
     """Directory the push actually runs in, when the command says so.
 
@@ -155,13 +169,13 @@ def _command_target_dir(command: str) -> Path | None:
         return None
     for i, tok in enumerate(tokens):
         if tok == "cd" and i + 1 < len(tokens):
-            return Path(tokens[i + 1])
+            return _as_local_path(tokens[i + 1])
         if tok != "git" and os.path.basename(tok) not in ("git", "git.exe"):
             continue
         j = i + 1
         while j < len(tokens) and tokens[j].startswith("-"):
             if tokens[j] == "-C" and j + 1 < len(tokens):
-                return Path(tokens[j + 1])
+                return _as_local_path(tokens[j + 1])
             j += 2 if tokens[j] in _GIT_VALUE_OPTS else 1
     return None
 

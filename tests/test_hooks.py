@@ -958,6 +958,21 @@ class TestPushTicketAcrossRepositories:
         assert r.returncode == 2
         assert "expired" in r.stderr
 
+    @pytest.mark.skipif(os.name != "nt", reason="MSYS drive spelling is Windows-only")
+    def test_a_git_bash_drive_path_is_understood(self, tmp_path):
+        """Git Bash writes `cd /d/repo`; read literally on Windows that points
+        at a directory on the current drive, so the gate found no ticket and
+        refused a push it had just authorized."""
+        repo = tmp_path / "lib"
+        self._ticket_for(repo, self._init_repo(repo))
+        drive, rest = str(repo)[0], str(repo)[3:].replace("\\", "/")
+        r = run_hook(
+            "git_push_gate.py",
+            {"tool_input": {"command": f"cd /{drive.lower()}/{rest} && git push"}},
+            cwd=self._session(tmp_path),
+        )
+        assert r.returncode == 0, r.stderr
+
     def test_a_ticket_does_not_open_the_firewall(self, tmp_path):
         """NEGATIVE: what bash_firewall refuses stays refused — a valid ticket
         authorizes a push, not a history rewrite."""
