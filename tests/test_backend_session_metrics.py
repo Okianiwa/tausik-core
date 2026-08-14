@@ -256,3 +256,54 @@ class TestRecomputeAllSessions:
         _add_session(be, "2026-04-25T10:00:00Z", None)
         out = recompute_all_sessions(be._q, be._q1)
         assert out[0]["wall_minutes"] > 0
+
+
+def _add_event_by(be, ts, actor):
+    be._conn.execute(
+        "INSERT INTO events(entity_type, entity_id, action, actor, created_at) "
+        "VALUES ('session', 'agent', 'tool_use', ?, ?)",
+        (actor, ts),
+    )
+    be._conn.commit()
+
+
+class TestAutonomousRunDoesNotSpendTheHumansClock:
+    """An iteration works inside whatever session is open — it never opens one
+    of its own. Counted as the human's, a night of autonomous work spends their
+    180 minutes and greets them with a session that refuses to start a task."""
+
+    def test_a_run_that_worked_all_night_costs_the_human_nothing(self, be):
+        sid = _add_session(be, "2026-04-25T00:00:00Z", "2026-04-25T08:00:00Z")
+        for hour in range(1, 8):
+            _add_event_by(be, f"2026-04-25T0{hour}:00:00Z", "autoloop")
+
+        assert compute_active_minutes(be._q, be._q1, sid) == 0
+
+    def test_the_human_still_burns_their_own_clock(self, be):
+        """AC negative: the fix must not weaken Rule 9.2 for the person. Events
+        with no actor — every historical row and every human one — still count."""
+        sid = _add_session(be, "2026-04-25T10:00:00Z", "2026-04-25T11:00:00Z")
+        for minute in (0, 5, 10, 15):
+            _add_event(be, f"2026-04-25T10:{minute:02d}:00Z")
+
+        assert compute_active_minutes(be._q, be._q1, sid) == 15
+
+    def test_a_mixed_window_counts_only_the_human(self, be):
+        """The realistic shape: the person works, walks away, the run continues
+        in the session they left open."""
+        sid = _add_session(be, "2026-04-25T10:00:00Z", "2026-04-25T14:00:00Z")
+        _add_event(be, "2026-04-25T10:00:00Z")
+        _add_event(be, "2026-04-25T10:05:00Z")
+        for minute in range(10, 60, 5):
+            _add_event_by(be, f"2026-04-25T11:{minute:02d}:00Z", "autoloop")
+
+        assert compute_active_minutes(be._q, be._q1, sid) == 5
+
+    def test_an_actor_that_is_not_the_run_is_the_human(self, be):
+        """AC negative: only the run's own mark is excluded. A claimed-by actor
+        left on an audit row is somebody working, and it counts."""
+        sid = _add_session(be, "2026-04-25T10:00:00Z", "2026-04-25T11:00:00Z")
+        _add_event_by(be, "2026-04-25T10:00:00Z", "developer")
+        _add_event_by(be, "2026-04-25T10:07:00Z", "developer")
+
+        assert compute_active_minutes(be._q, be._q1, sid) == 7

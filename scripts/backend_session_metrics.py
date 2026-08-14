@@ -76,6 +76,12 @@ def compute_active_seconds(
             FROM events
             WHERE created_at >= ?
               AND created_at <= COALESCE(?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+              -- An unattended run leaves its events in the human's session:
+              -- an iteration never opens a session of its own, so by id these
+              -- rows are the human's. Counted, a night of autonomous work
+              -- spends the 180 minutes of Rule 9.2 and greets them in the
+              -- morning with a session that refuses to start a task.
+              AND (actor IS NULL OR actor <> 'autoloop')
         ),
         deltas AS (
             SELECT CASE

@@ -126,3 +126,19 @@ def assistant_entry(input_tokens=0, cache_read=0, cache_creation=0, model="claud
     }
     entry.update(extra)
     return entry
+
+
+@pytest.fixture(autouse=True)
+def _session_has_room(monkeypatch):
+    """The supervisor asks "is there budget left?" before every iteration, and
+    the answer comes from a real CLI subprocess.
+
+    Left alone in a suite that stubs `subprocess.run`, that question is served
+    by the stub and counted as an iteration — every brake test saw twice the
+    launches it expected. Tests about the budget itself override this.
+    """
+    try:
+        import autoloop_run
+    except ImportError:  # a suite that never touches the supervisor
+        return
+    monkeypatch.setattr(autoloop_run, "session_spent", lambda _dir: None)

@@ -35,6 +35,7 @@ from autoloop.state import (  # noqa: E402
     read_state,
 )
 import autoloop_git  # noqa: E402
+from autoloop_limits import session_spent  # noqa: E402
 from autoloop_child import (  # noqa: E402
     build_prompt,
     claude_command,
@@ -196,9 +197,7 @@ def loop(args: argparse.Namespace) -> int:
     # that died — label it now rather than leaving it ambiguous forever.
     orphans = journal.mark_orphans_crashed(str(project_dir))
     if orphans:
-        log(
-            f"[autoloop] в журнале {orphans} незакрытых итераций — помечены как падения"
-        )
+        log(f"[autoloop] в журнале {orphans} незакрытых итераций — помечены как падения")
 
     brakes = BrakeState.from_config(
         config,
@@ -215,6 +214,18 @@ def loop(args: argparse.Namespace) -> int:
                 exit_code = EXIT_OK if verdict.clean else EXIT_STOPPED
                 break
 
+            # Asked before the task is picked, not after the iteration failed.
+            # A session with no budget left refuses `task start`, and the child
+            # spends its turn discovering that — the run then looks like a
+            # string of iterations that did nothing, with the reason visible
+            # only inside conversations nobody kept.
+            spent = session_spent(str(project_dir))
+            if spent:
+                journal.append_event(str(project_dir), journal.EVENT_SESSION_EXHAUSTED, spent=spent)
+                log(f"[autoloop] стоп: у сессии кончилась {spent} — задачи не стартуют")
+                exit_code = EXIT_OK
+                break
+
             task_slug = pick_next_task(project_dir)
             if not task_slug:
                 log("[autoloop] очередь пуста — цикл завершён")
@@ -227,17 +238,11 @@ def loop(args: argparse.Namespace) -> int:
             if args.dry_run:
                 log(
                     "[autoloop] dry-run, команда: "
-                    + " ".join(
-                        claude_command(
-                            "<prompt>", project_dir, args.model, args.git_mode
-                        )
-                    )
+                    + " ".join(claude_command("<prompt>", project_dir, args.model, args.git_mode))
                 )
                 break
 
-            entry = journal.open_iteration(
-                str(project_dir), brakes.iteration, task_slug, before
-            )
+            entry = journal.open_iteration(str(project_dir), brakes.iteration, task_slug, before)
             head_before = git_head(project_dir)
             session_before = read_session_row(str(project_dir))
             result = run_iteration(
@@ -262,10 +267,7 @@ def loop(args: argparse.Namespace) -> int:
                 str(project_dir),
                 entry,
                 exit_reason=(
-                    result["error"]
-                    or state.get("exit_kind")
-                    or unmeasured
-                    or "completed"
+                    result["error"] or state.get("exit_kind") or unmeasured or "completed"
                 ),
                 percent_at_exit=state.get("percent"),
                 status_after=after.get(task_slug),
@@ -299,9 +301,7 @@ def loop(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Автономный цикл выполнения задач TAUSIK"
-    )
+    parser = argparse.ArgumentParser(description="Автономный цикл выполнения задач TAUSIK")
     sub = parser.add_subparsers(dest="command", required=True)
 
     run = sub.add_parser("run", help="запустить цикл")
@@ -312,9 +312,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="итераций подряд без прогресса до остановки",
     )
-    run.add_argument(
-        "--max-crashes", type=int, default=None, help="падений подряд до остановки"
-    )
+    run.add_argument("--max-crashes", type=int, default=None, help="падений подряд до остановки")
     run.add_argument("--model", default=None)
     run.add_argument(
         "--git-mode",
@@ -327,9 +325,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="направление работы, добавляется в промпт итерации",
     )
-    run.add_argument(
-        "--timeout", type=int, default=3600, help="таймаут одной итерации, сек"
-    )
+    run.add_argument("--timeout", type=int, default=3600, help="таймаут одной итерации, сек")
     run.add_argument("--dry-run", action="store_true", help="показать команду и выйти")
 
     sub.add_parser("report", help="сводка последнего прогона")
@@ -346,9 +342,7 @@ def main(argv: list[str] | None = None) -> int:
         import autoloop_screen
 
         try:
-            return autoloop_screen.run_dashboard(
-                str(PROJECT_DIR), load_config(str(PROJECT_DIR))
-            )
+            return autoloop_screen.run_dashboard(str(PROJECT_DIR), load_config(str(PROJECT_DIR)))
         except KeyboardInterrupt:
             # textual restores the terminal on its own teardown; this only keeps
             # Ctrl+C from printing a traceback over the restored screen.
@@ -357,9 +351,7 @@ def main(argv: list[str] | None = None) -> int:
         import autoloop_overlay
 
         try:
-            return autoloop_overlay.run_overlay(
-                str(PROJECT_DIR), load_config(str(PROJECT_DIR))
-            )
+            return autoloop_overlay.run_overlay(str(PROJECT_DIR), load_config(str(PROJECT_DIR)))
         except KeyboardInterrupt:
             return EXIT_OK
     if args.command == "report":

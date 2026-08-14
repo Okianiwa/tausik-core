@@ -24,6 +24,7 @@ import sys
 import time
 
 import autoloop_keys as keys
+from autoloop_limits import session_spent, status_text  # noqa: F401 — status_text: tests
 from autoloop_presence import idle_seconds, transcript_path, transcript_size
 from tausik_utils import tausik_config_path
 from autoloop_chat_cycle import (
@@ -52,14 +53,6 @@ MAX_READING_AGE = 180.0
 IDLE_SECONDS = 45.0  # quiet before the chat counts as "not in use right now"
 POLL_SECONDS = 2.0
 ESC = "\x1b"
-
-STATUS_TIMEOUT = 30.0
-CREATE_NO_WINDOW = 0x08000000
-# Two budgets, not one. The clock is the famous limit, but the capacity gate is
-# the one that actually refuses work: `task start` blocks on remaining calls
-# long before the 180 minutes are up.
-CLOCK_LINE = re.compile(r"active\s+(\d+)m\s*/\s*(\d+)m")
-CAPACITY_LINE = re.compile(r"Capacity:\s*(\d+)/(\d+)\s+used.*?(-?\d+)\s+remaining")
 
 
 def log(project_dir: str, message: str) -> None:
@@ -155,51 +148,6 @@ def deliver(project_dir: str, pid: int, command: str, trace: str):
             return True, ""
         log(project_dir, f"{command}: следа нет, попытка {attempt} из {attempts}")
     return False, "чат не отозвался — команда не выполнилась"
-
-
-def status_text(project_dir: str):
-    """What the CLI says about the project, or None.
-
-    Read through the CLI, like everything else here — the database is not this
-    process's to open, and the limits it would have to compute by hand already
-    account for `session extend`.
-    """
-    cli = os.path.join(os.path.dirname(os.path.abspath(__file__)), "project.py")
-    try:
-        out = subprocess.run(
-            [sys.executable, cli, "status"],
-            stdin=subprocess.DEVNULL,  # nothing to read; an inherited stdin can hang the run
-            cwd=project_dir,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=STATUS_TIMEOUT,
-            creationflags=CREATE_NO_WINDOW,  # or the desktop blinks every cycle
-            env={**os.environ, "PYTHONUTF8": "1"},
-        )
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return None
-    return out.stdout or ""
-
-
-def session_spent(project_dir: str):
-    """Which budget has run out, named for the log — or None while there is room.
-
-    Anything unreadable answers "there is room": closing a session that still
-    had some costs the human their working history for nothing, while a
-    session closed one cycle late costs nothing at all.
-    """
-    text = status_text(project_dir)
-    if text is None:
-        return None
-    clock = CLOCK_LINE.search(text)
-    if clock and int(clock.group(1)) >= int(clock.group(2)):
-        return f"время {clock.group(1)}/{clock.group(2)} мин"
-    room = CAPACITY_LINE.search(text)
-    if room and (int(room.group(1)) >= int(room.group(2)) or int(room.group(3)) <= 0):
-        return f"ёмкость {room.group(1)}/{room.group(2)}, свободно {room.group(3)}"
-    return None
 
 
 def run_sequence(project_dir: str, pid: int, cycle: Maintenance) -> bool:

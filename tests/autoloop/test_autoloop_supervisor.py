@@ -21,7 +21,16 @@ def loop_env(monkeypatch, project_dir):
     monkeypatch.setattr(autoloop, "PROJECT_DIR", Path(project_dir))
     monkeypatch.setattr(autoloop, "tausik_cli", lambda _dir: "fake-tausik")
 
-    calls = {"claude": [], "queue": {"active": [], "planning": []}, "statuses": {}}
+    calls = {
+        "claude": [],
+        "queue": {"active": [], "planning": []},
+        "statuses": {},
+        "spent": None,  # which session budget has run out; None = there is room
+    }
+    # Asked before every iteration and answered through the CLI, which is
+    # stubbed here — left real, its subprocess call would be counted as a
+    # claude launch by every test in this file.
+    monkeypatch.setattr(autoloop, "session_spent", lambda _dir: calls["spent"])
 
     def fake_cli(project, args, timeout=30):
         if args[:2] == ["task", "list"]:
@@ -46,9 +55,7 @@ def loop_env(monkeypatch, project_dir):
         # Default: the task gets closed, so the queue drains by one.
         if calls["queue"]["planning"]:
             calls["queue"]["planning"].pop(0)
-        payload = json.dumps(
-            {"is_error": False, "total_cost_usd": 0.01, "session_id": "s"}
-        )
+        payload = json.dumps({"is_error": False, "total_cost_usd": 0.01, "session_id": "s"})
         return subprocess.CompletedProcess(cmd, 0, payload, "")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -172,8 +179,7 @@ def test_prompt_falls_back_when_template_is_missing(tmp_path):
 def test_result_parsing_is_forgiving(loop_env, project_dir, stdout, expected_cost):
     loop_env["queue"]["planning"] = ["task-a"]
     loop_env["behaviour"] = lambda cmd, calls: (
-        calls["queue"]["planning"].clear()
-        or subprocess.CompletedProcess(cmd, 0, stdout, "")
+        calls["queue"]["planning"].clear() or subprocess.CompletedProcess(cmd, 0, stdout, "")
     )
 
     run_loop()  # must not raise on any of these shapes
@@ -292,3 +298,48 @@ def test_brake_state_counts_streaks():
 
     assert state.crash_streak == 0
     assert state.idle_streak == 0
+
+
+# --- a session with nothing left ------------------------------------------
+
+
+def test_an_exhausted_session_stops_the_run_before_it_spends_an_iteration(
+    loop_env, project_dir, capsys
+):
+    """AC negative: a session with no budget left refuses `task start`, and the
+    child spends its whole turn finding that out. Iteration after iteration
+    would do nothing, and the reason would live only inside conversations
+    nobody keeps."""
+    loop_env["queue"]["planning"] = ["task-a", "task-b"]
+    loop_env["spent"] = "ёмкость 164/200, свободно -84"
+
+    code = run_loop()
+
+    assert code == 0
+    assert loop_env["claude"] == []  # not one iteration was spent
+    assert "кончилась ёмкость 164/200" in capsys.readouterr().out
+
+
+def test_the_reason_reaches_the_journal_and_the_report(loop_env, project_dir):
+    """Stdout scrolls away; the journal is what the morning has to read."""
+    import autoloop_journal as journal
+
+    loop_env["queue"]["planning"] = ["task-a"]
+    loop_env["spent"] = "время 180/180 мин"
+
+    run_loop()
+
+    events = journal.summarize(str(project_dir))["exhausted"]
+    assert [e["spent"] for e in events] == ["время 180/180 мин"]
+    # A night that stopped before its first iteration used to report "the
+    # journal is empty" — the same silence this event exists to break.
+    assert "кончилась время 180/180 мин" in journal.format_report(str(project_dir))
+
+
+def test_a_session_with_room_runs_as_before(loop_env):
+    """The check must not become a new way for the run to refuse to start."""
+    loop_env["queue"]["planning"] = ["task-a"]
+
+    run_loop()
+
+    assert len(loop_env["claude"]) == 1

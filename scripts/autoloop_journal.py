@@ -24,6 +24,7 @@ REASON_CRASHED = "crashed"
 # per-iteration collapse below.
 EVENT_KEY = "event"
 
+EVENT_SESSION_EXHAUSTED = "session_budget_exhausted"
 EVENT_SESSION_END_BLOCKED = "session_end_blocked"
 EVENT_SESSION_CLOSED = "session_closed_during_iteration"
 EVENT_HANDOFF = "iteration_handoff"
@@ -202,6 +203,12 @@ def summarize(project_dir: str) -> dict:
         "session_violations": [
             e for e in read_events(project_dir) if e.get(EVENT_KEY) in SESSION_VIOLATIONS
         ],
+        # Not a violation — a run that stopped for a stated reason. Kept apart
+        # so the report can say "the budget ran out" instead of leaving a night
+        # that ended early looking like a night that had nothing to do.
+        "exhausted": [
+            e for e in read_events(project_dir) if e.get(EVENT_KEY) == EVENT_SESSION_EXHAUSTED
+        ],
         "cost_usd": round(sum(float(e.get("cost_usd") or 0) for e in entries), 4),
         "tokens": sum_tokens(entries),
         "commits": [c for e in entries for c in (e.get("commits") or [])],
@@ -282,8 +289,16 @@ def format_tokens(count) -> str:
 
 def format_report(project_dir: str) -> str:
     summary = summarize(project_dir)
-    if not summary["iterations"]:
+    if not summary["iterations"] and not summary["exhausted"]:
         return "[autoloop] прогонов не было — журнал пуст"
+    if not summary["iterations"]:
+        # A run that stopped before its first iteration still has to say why.
+        # "The journal is empty" for a night that refused to start is the same
+        # silence this event exists to break.
+        return "\n".join(
+            f"[autoloop] итераций не было: у сессии кончилась {e.get('spent') or 'ёмкость'}"
+            for e in summary["exhausted"]
+        )
 
     # The place the full breakdown lives. The screens show work done and
     # nothing else; here there is room to say what that number is made of and
@@ -311,6 +326,11 @@ def format_report(project_dir: str) -> str:
         lines.append(
             f"  прервано: итерация {entry['iteration']} ({entry['task_slug']}) — "
             "процесс не закрыл запись, засчитано как падение"
+        )
+    for event in summary["exhausted"]:
+        lines.append(
+            f"  прогон остановлен: у сессии кончилась {event.get('spent') or 'ёмкость'} — "
+            "задачи не стартовали бы, итерации не тратились"
         )
     for event in summary["session_violations"]:
         lines.append(f"  граница сессии: {describe_violation(event)}")
