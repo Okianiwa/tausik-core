@@ -40,9 +40,7 @@ from autoloop.state import STATE_COMPLETE, load_config, read_state, write_state 
 EXIT_SOFT = "soft"
 EXIT_HARD = "hard"
 
-_HANDOFF_COMMAND = (
-    'python .claude/scripts/autoloop_handoff.py write "<текст>" --task {task}'
-)
+_HANDOFF_COMMAND = 'python .claude/scripts/autoloop_handoff.py write "<текст>" --task {task}'
 
 _SOFT_INSTRUCTION = (
     "[autoloop] Контекст заполнен на {percent}% (порог {threshold}%), а задача «{task}» "
@@ -66,6 +64,40 @@ _HARD_INSTRUCTION = (
 )
 
 
+_SOFT_CHAT = (
+    "[autoloop] Контекст заполнен на {percent}% (порог {threshold}%), а задача «{task}» "
+    "доведена до конца — все шаги плана закрыты. Сворачивайся СЕЙЧАС, не начиная новую работу:\n"
+    "1. Убедись, что задача закрыта через `tausik verify` + `task done --ac-verified`.\n"
+    "2. Выполни `/checkpoint` — handoff в БД переживёт очистку, переписка нет.\n"
+    "3. Заверши турн и ничего больше не делай. Контекст очистит наблюдатель снаружи "
+    "и вернёт тебя к работе — процесс завершать НЕ нужно, сессию НЕ закрывай."
+)
+
+_HARD_CHAT = (
+    "[autoloop] Контекст заполнен на {percent}% (аварийный порог {threshold}%). "
+    "Окна почти не осталось — работу нужно прервать, даже если задача «{task}» не завершена.\n"
+    "1. НЕ начинай новых правок и не запускай тяжёлых команд.\n"
+    "2. Залогируй в задачу (`task log`), на каком шаге плана остановился, какие файлы уже "
+    "изменены и что проверить дальше.\n"
+    "3. Выполни `/checkpoint` и заверши турн. Очистку проведёт наблюдатель снаружи; "
+    "процесс завершать НЕ нужно, сессию НЕ закрывай."
+)
+
+
+def run_declared(project_dir: str) -> bool:
+    """Did the human declare a run in this chat?
+
+    Import-local: a Stop hook that dies on an import kills the turn it was
+    supposed to end politely.
+    """
+    try:
+        import autoloop_chat_cycle
+
+        return autoloop_chat_cycle.run_declared(project_dir)
+    except ImportError:
+        return False
+
+
 def decide(state: dict, config: dict) -> str | None:
     """Which exit, if any, this state calls for. None = let the turn end."""
     percent = state.get("percent")
@@ -73,19 +105,25 @@ def decide(state: dict, config: dict) -> str | None:
         return None  # unmeasurable context is not evidence of a full one
     if percent >= config["hard_threshold"]:
         return EXIT_HARD
-    if (
-        percent >= config["soft_threshold"]
-        and state.get("task_state") == STATE_COMPLETE
-    ):
+    if percent >= config["soft_threshold"] and state.get("task_state") == STATE_COMPLETE:
         return EXIT_SOFT
     return None
 
 
-def build_instruction(kind: str, state: dict, config: dict) -> str:
-    template = _HARD_INSTRUCTION if kind == EXIT_HARD else _SOFT_INSTRUCTION
-    threshold = (
-        config["hard_threshold"] if kind == EXIT_HARD else config["soft_threshold"]
-    )
+def build_instruction(kind: str, state: dict, config: dict, interactive: bool = False) -> str:
+    """The instruction handed to the agent. Two dialects, one decision.
+
+    Headless ends by dying: the supervisor starts a fresh process, so the
+    handoff has to go into the run journal. In a declared run inside a live
+    chat nothing dies — the watcher outside runs `/clear` and hands the work
+    back — so the handoff belongs in the database, where `/checkpoint` puts it,
+    and telling the agent to exit would take the human's window down with it.
+    """
+    if interactive:
+        template = _HARD_CHAT if kind == EXIT_HARD else _SOFT_CHAT
+    else:
+        template = _HARD_INSTRUCTION if kind == EXIT_HARD else _SOFT_INSTRUCTION
+    threshold = config["hard_threshold"] if kind == EXIT_HARD else config["soft_threshold"]
     return template.format(
         percent=state.get("percent"),
         threshold=int(threshold),
@@ -127,7 +165,14 @@ def main() -> int:
     if kind is None:
         return 0
 
-    if not autonomy_enabled(project_dir):
+    # Two ways to be armed. Headless autonomy is one. The other is a run the
+    # human declared in this very chat: without it the guard stays silent and
+    # the window fills to the brim, because the watcher outside waits for a
+    # quiet that never comes — the transcript keeps growing from the agent's
+    # own work. Asking the agent to wrap up is the only signal that reaches it
+    # mid-flight.
+    interactive = not autonomy_enabled(project_dir) and run_declared(project_dir)
+    if not (autonomy_enabled(project_dir) or interactive):
         note = autonomy.warn_if_misconfigured(project_dir)
         print(
             f"[autoloop] контекст {state['percent']}% — в автономном режиме "
@@ -152,11 +197,8 @@ def main() -> int:
     state["exit_kind"] = kind
     write_state(project_dir, session_id, state)
 
-    print(
-        json.dumps(
-            {"decision": "block", "reason": build_instruction(kind, state, config)}
-        )
-    )
+    instruction = build_instruction(kind, state, config, interactive)
+    print(json.dumps({"decision": "block", "reason": instruction}))
     return 0
 
 

@@ -258,3 +258,63 @@ def test_idle_state_is_recorded_when_no_task_is_active(
     sensor.main()
 
     assert read_state(project_dir, SESSION)["task_state"] == STATE_IDLE
+
+
+# --- the seam inside a declared run ----------------------------------------
+
+
+def declare_run(project_dir):
+    import autoloop_chat_cycle
+
+    autoloop_chat_cycle.start_run(str(project_dir), "очередь задач")
+
+
+def test_a_declared_run_arms_the_guard_without_autonomy(
+    monkeypatch, project_dir, add_task, transcript, capsys
+):
+    """The hole this closes: the watcher waits for 45 s of quiet, and inside a
+    run the transcript never stops growing — it grows from the agent's own
+    work. Asking the agent to wrap up is the only signal that reaches it."""
+    declare_run(project_dir)
+    add_task("t1", steps=[("a", True)])
+    path = transcript([assistant_entry(cache_read=320_000)])
+
+    code, decision = capture(
+        monkeypatch, project_dir, {"transcript_path": path}, autonomy=False, capsys=capsys
+    )
+
+    assert code == 0
+    assert decision["decision"] == "block"
+
+
+def test_the_chat_is_told_to_checkpoint_not_to_die(
+    monkeypatch, project_dir, add_task, transcript, capsys
+):
+    """Nothing dies here: the watcher runs /clear and hands the work back. An
+    instruction to exit would take the human's window down with it."""
+    declare_run(project_dir)
+    add_task("t1", steps=[("a", True)])
+    path = transcript([assistant_entry(cache_read=320_000)])
+
+    _code, decision = capture(
+        monkeypatch, project_dir, {"transcript_path": path}, autonomy=False, capsys=capsys
+    )
+
+    assert "/checkpoint" in decision["reason"]
+    assert "процесс завершать НЕ нужно" in decision["reason"]
+
+
+def test_without_a_run_the_guard_still_keeps_quiet(
+    monkeypatch, project_dir, add_task, transcript, capsys
+):
+    """AC negative: outside a declared run the human never asked for autonomy,
+    and blocking Stop would hijack a turn they are watching."""
+    add_task("t1", steps=[("a", True)])
+    path = transcript([assistant_entry(cache_read=320_000)])
+
+    code, decision = capture(
+        monkeypatch, project_dir, {"transcript_path": path}, autonomy=False, capsys=capsys
+    )
+
+    assert code == 0
+    assert decision is None
