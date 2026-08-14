@@ -18,7 +18,6 @@ from __future__ import annotations
 import glob
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -106,6 +105,23 @@ def alive(pid) -> bool:
     return bool(pid) and keys.pid_exists(pid)
 
 
+def stopping(project_dir: str) -> str | None:
+    """Why the watcher must stop right now, or None to carry on.
+
+    Asked between cycles AND inside one. A cleanup can spend minutes waiting
+    for a mark and retrying, and during that time withdrawing the run used to
+    change nothing: the watcher kept typing into a chat it had already been
+    released from. Seen live — the run was withdrawn at 23:00, the watcher
+    retried /checkpoint at 23:03, and the process had to be killed by hand
+    while its keystrokes landed in somebody else's window.
+    """
+    if os.path.exists(os.path.join(project_dir, STOP_FILE)):
+        return "остановлен файлом-стопом"
+    if not run_declared(project_dir):
+        return "прогон снят — наблюдатель уходит"
+    return None
+
+
 def deliver(project_dir: str, pid: int, command: str, trace: str):
     """Type one command and wait for the mark that proves it ran.
 
@@ -121,6 +137,12 @@ def deliver(project_dir: str, pid: int, command: str, trace: str):
     """
     attempts = 1 if trace == WAIT_SPEAKING else DELIVERY_ATTEMPTS
     for attempt in range(1, attempts + 1):
+        # Asked before every keystroke, not only before the first: waiting for
+        # a mark takes minutes, and the human may withdraw the run in between.
+        halt = stopping(project_dir)
+        if halt:
+            log(project_dir, f"{command}: {halt}, подача прервана")
+            return False, halt
         # Stale marks answer for the command that has not run yet.
         clear_ready(project_dir)
         clear_started(project_dir)
@@ -161,6 +183,11 @@ def run_sequence(project_dir: str, pid: int, cycle: Maintenance) -> bool:
         cycle.awaiting_drop = True
         return False
     for command, trace in steps:
+        halt = stopping(project_dir)
+        if halt:
+            log(project_dir, f"{halt}; цикл уборки прерван перед {command}")
+            cycle.awaiting_drop = True
+            return False
         sent, reason = deliver(project_dir, pid, command, trace)
         if not sent:
             log(project_dir, f"{command} не прошёл: {reason}")
@@ -221,13 +248,12 @@ def watch(
     blind, armed_screen = False, None
     try:
         while alive(pid):
-            if os.path.exists(os.path.join(project_dir, STOP_FILE)):
-                log(project_dir, "остановлен файлом-стопом")
-                return 0
-            if not run_declared(project_dir):
-                # The human said stop. Nothing to signal and no PID to get
-                # wrong: the declaration is gone, so the watcher is too.
-                log(project_dir, "прогон снят — наблюдатель уходит")
+            # The human said stop. Nothing to signal and no PID to get wrong:
+            # the declaration is gone, so the watcher is too. The same question
+            # is asked inside a running cleanup — see `stopping`.
+            halt = stopping(project_dir)
+            if halt:
+                log(project_dir, halt)
                 return 0
             percent = reading(project_dir)
             path = transcript_path(project_dir, transcript)

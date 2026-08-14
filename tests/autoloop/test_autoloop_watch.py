@@ -105,9 +105,13 @@ def keyboard(project_dir, monkeypatch):
     return rec
 
 
+CONTINUATION = "Продолжай прогон. Направление: прогон объявлен"
+
+
 def test_the_draft_is_cleared_before_each_command(project_dir, keyboard):
     """Without Esc the command glues itself onto whatever the human had
     half-typed, and both are ruined."""
+    cycle_state.start_run(str(project_dir), "прогон объявлен")
     watch.run_sequence(str(project_dir), 111, watch.Maintenance())
 
     assert keyboard.typed == [
@@ -117,6 +121,9 @@ def test_the_draft_is_cleared_before_each_command(project_dir, keyboard):
         "/clear",
         watch.ESC,
         "/start",
+        # The declared run hands the work back; that step takes no Esc — see
+        # test_the_continuation_does_not_press_escape_first.
+        CONTINUATION,
     ]
     assert (watch.ESC, False) in keyboard.sent  # Esc is typed, never submitted
 
@@ -144,6 +151,7 @@ def test_a_command_that_left_no_trace_is_not_reported_as_done(project_dir, keybo
     """The live failure: `/start` was written into a console that had stopped
     reading, the write succeeded, and the log said "подано" for a command that
     never ran."""
+    cycle_state.start_run(str(project_dir), "прогон объявлен")
     monkeypatch.setattr(watch, "confirm", lambda *_a, **_k: False)
 
     watch.run_sequence(str(project_dir), 111, watch.Maintenance())
@@ -156,7 +164,8 @@ def test_a_command_that_left_no_trace_is_not_reported_as_done(project_dir, keybo
 def test_a_command_lost_on_the_way_is_typed_again(project_dir, keyboard, monkeypatch):
     """Right after `/clear` the chat is rebuilding itself and reads nothing;
     one retry is the difference between a finished cycle and a silent stall."""
-    answers = [False, True, True, True]
+    cycle_state.start_run(str(project_dir), "прогон объявлен")
+    answers = [False, True, True, True, True]
     monkeypatch.setattr(watch, "confirm", lambda *_a, **_k: answers.pop(0))
 
     ok = watch.run_sequence(str(project_dir), 111, watch.Maintenance())
@@ -166,6 +175,7 @@ def test_a_command_lost_on_the_way_is_typed_again(project_dir, keyboard, monkeyp
 
 
 def test_a_command_nobody_answers_gives_up_after_a_few_tries(project_dir, keyboard, monkeypatch):
+    cycle_state.start_run(str(project_dir), "прогон объявлен")
     monkeypatch.setattr(watch, "confirm", lambda *_a, **_k: False)
 
     watch.run_sequence(str(project_dir), 111, watch.Maintenance())
@@ -218,6 +228,7 @@ def test_a_session_with_room_left_is_not_closed(project_dir, keyboard):
 def test_a_spent_session_is_closed_before_the_wipe(project_dir, keyboard, monkeypatch):
     """The handoff has to be written while the conversation it summarises still
     exists — after `/clear` there is nothing left to summarise."""
+    cycle_state.start_run(str(project_dir), "прогон объявлен")
     monkeypatch.setattr(watch, "session_spent", lambda _p: "время 181/180 мин")
 
     watch.run_sequence(str(project_dir), 111, watch.Maintenance())
@@ -231,6 +242,7 @@ def test_a_spent_session_is_closed_before_the_wipe(project_dir, keyboard, monkey
         "/clear",
         watch.ESC,
         "/start",
+        CONTINUATION,
     ]
 
 
@@ -515,6 +527,7 @@ def test_the_continuation_is_typed_once_and_never_repeated(project_dir, keyboard
     takes. A retry would land a duplicate command on an agent mid-edit — the
     retry that protects the other steps is the worst thing that could happen
     to this one."""
+    cycle_state.start_run(str(project_dir), "прогон объявлен")
     monkeypatch.setattr(watch, "confirm", lambda *_a, **_k: False)
 
     watch.deliver(
@@ -529,6 +542,7 @@ def test_the_continuation_does_not_press_escape_first(project_dir, keyboard):
     what it does instead is interrupt a turn that is still drawing itself. The
     run of 17:24 shows the cost: `Interrupted` where the fresh session's answer
     should have been."""
+    cycle_state.start_run(str(project_dir), "прогон объявлен")
     watch.deliver(str(project_dir), 111, "Продолжай прогон", watch.WAIT_SPEAKING)
 
     assert keyboard.typed == ["Продолжай прогон"]
@@ -537,6 +551,7 @@ def test_the_continuation_does_not_press_escape_first(project_dir, keyboard):
 def test_the_other_steps_keep_their_retries(project_dir, keyboard, monkeypatch):
     """Right after `/clear` the chat reads nothing; one retry is the difference
     between a finished cycle and a silent stall."""
+    cycle_state.start_run(str(project_dir), "прогон объявлен")
     monkeypatch.setattr(watch, "confirm", lambda *_a, **_k: False)
 
     watch.deliver(str(project_dir), 111, "/checkpoint", cycle_state.WAIT_TURN)
@@ -557,6 +572,7 @@ def test_a_delivery_is_measured_against_the_transcript_before_typing(
 ):
     """ "It answered" means it grew past what it held when the command went in —
     measured before the keys, or the growth being waited on is already there."""
+    cycle_state.start_run(str(project_dir), "прогон объявлен")
     seen = []
     monkeypatch.setattr(watch, "transcript_size", lambda *_a, **_k: seen.append("measured") or 7)
     monkeypatch.setattr(
@@ -574,6 +590,7 @@ def test_the_baseline_is_taken_after_the_draft_is_cleared(project_dir, keyboard,
     as the chat answering: the run of 17:24 reported the continuation delivered
     in the same second it was typed, having confirmed itself against its own
     Esc."""
+    cycle_state.start_run(str(project_dir), "прогон объявлен")
     events = []
     monkeypatch.setattr(
         watch.keys,
@@ -585,3 +602,89 @@ def test_the_baseline_is_taken_after_the_draft_is_cleared(project_dir, keyboard,
     watch.deliver(str(project_dir), 111, "/checkpoint", cycle_state.WAIT_TURN)
 
     assert events == [watch.ESC, "measured", "/checkpoint"]
+
+
+# --- withdrawing the run interrupts a cleanup already under way ------------
+
+
+def withdraw_run(project_dir):
+    """Exactly what `/auto стоп` does."""
+    cycle_state.end_run(str(project_dir))
+
+
+class TestStopInterruptsTheCycle:
+    """Withdrawing the run used to change nothing until the cycle ended: the
+    watcher waits minutes for a mark and retries up to three times. Seen live —
+    the run was withdrawn at 23:00, /checkpoint was retyped at 23:03 into a
+    chat the human had already released it from, and the process had to be
+    killed by hand."""
+
+    def test_the_next_command_is_not_typed_after_a_withdrawal(
+        self, project_dir, keyboard, monkeypatch
+    ):
+        cycle_state.start_run(str(project_dir), "прогон объявлен")
+        real = watch.deliver
+
+        def withdraw_after_first(pd, pid, command, trace):
+            result = real(pd, pid, command, trace)
+            withdraw_run(project_dir)
+            return result
+
+        monkeypatch.setattr(watch, "deliver", withdraw_after_first)
+        ok = watch.run_sequence(str(project_dir), 111, watch.Maintenance())
+
+        assert ok is False
+        assert keyboard.typed.count("/clear") == 0, "typed on after the run was withdrawn"
+
+    def test_a_retry_does_not_survive_a_withdrawal(self, project_dir, keyboard, monkeypatch):
+        """The retry loop is where the watcher used to spend those minutes."""
+        cycle_state.start_run(str(project_dir), "прогон объявлен")
+
+        def fail_then_withdraw(*_a, **_k):
+            withdraw_run(project_dir)
+            return False
+
+        monkeypatch.setattr(watch, "confirm", fail_then_withdraw)
+        sent, reason = watch.deliver(str(project_dir), 111, "/checkpoint", cycle_state.WAIT_TURN)
+
+        assert sent is False
+        assert keyboard.typed.count("/checkpoint") == 1, "retried after the withdrawal"
+        assert "прогон снят" in reason
+
+    def test_the_stop_file_interrupts_too(self, project_dir, keyboard, monkeypatch):
+        cycle_state.start_run(str(project_dir), "прогон объявлен")
+
+        def fail_then_stop(*_a, **_k):
+            (project_dir / ".tausik" / ".chat-watch.stop").write_text("", encoding="utf-8")
+            return False
+
+        monkeypatch.setattr(watch, "confirm", fail_then_stop)
+        sent, reason = watch.deliver(str(project_dir), 111, "/checkpoint", cycle_state.WAIT_TURN)
+
+        assert sent is False
+        assert keyboard.typed.count("/checkpoint") == 1
+        assert "стоп" in reason
+
+    def test_the_reason_reaches_the_log(self, project_dir, keyboard, monkeypatch):
+        """A watcher that stops silently is indistinguishable from one that hung."""
+        cycle_state.start_run(str(project_dir), "прогон объявлен")
+
+        def fail_then_withdraw(*_a, **_k):
+            withdraw_run(project_dir)
+            return False
+
+        monkeypatch.setattr(watch, "confirm", fail_then_withdraw)
+        watch.deliver(str(project_dir), 111, "/checkpoint", cycle_state.WAIT_TURN)
+
+        log = (project_dir / ".tausik" / "chat-watch.log").read_text(encoding="utf-8")
+        assert "прогон снят" in log
+        assert "подача прервана" in log
+
+    def test_a_lock_left_by_a_dead_process_does_not_block(self, project_dir):
+        """NEGATIVE: a killed watcher must not lock the project out. The pid in
+        the lock is checked, so a stale one is simply taken over."""
+        lock = project_dir / ".tausik" / ".chat-watch.lock"
+        lock.write_text("999999999", encoding="utf-8")
+
+        assert watch.take_lock(str(project_dir)) is True
+        assert lock.read_text(encoding="utf-8").strip() != "999999999"
