@@ -2,6 +2,7 @@
 
 import json
 
+import autoloop_presence as presence
 import autoloop_watch as watch
 import chat_watch as hook  # hooks/ is on the path via conftest
 import pytest
@@ -53,10 +54,17 @@ def test_files_without_a_percent_are_somebody_elses(project_dir):
     assert watch.reading(str(project_dir)) is None
 
 
-def test_no_transcript_reads_as_idle(tmp_path):
-    """A chat that writes nothing also loses nothing."""
-    assert watch.idle_seconds(None) == float("inf")
-    assert watch.idle_seconds(str(tmp_path / "missing.jsonl")) == float("inf")
+def test_no_transcript_reads_as_unknown(tmp_path):
+    """AC negative: not finding the conversation is not evidence that nobody is
+    in it. This used to answer "quiet forever", and that answer is what let the
+    watcher arm itself over somebody who was typing."""
+    assert watch.idle_seconds(None) is None
+    assert watch.idle_seconds(str(tmp_path / "missing.jsonl")) is None
+
+
+def test_an_unknown_quiet_never_acts():
+    """AC negative: the full window is real, the empty room is a guess."""
+    assert watch.should_act(99, threshold=30, quiet_for=None) is False
 
 
 def test_a_fresh_transcript_reads_as_busy(tmp_path):
@@ -341,9 +349,109 @@ def test_after_a_wipe_the_watcher_follows_the_new_conversation(project_dir, tmp_
     assert watch.transcript_path(str(project_dir), str(old)) == str(new)
 
 
-def test_a_session_file_pointing_nowhere_is_ignored(project_dir, tmp_path):
-    known = tmp_path / "known.jsonl"
-    known.write_text("{}", encoding="utf-8")
-    hook.mark_started(str(project_dir), str(tmp_path / "deleted.jsonl"))
+def test_a_session_whose_file_does_not_exist_yet_is_still_the_session(project_dir, tmp_path):
+    """Claude Code creates the transcript on the first message, so a fresh
+    session is named minutes before its file appears. Falling back to the
+    previous file there is how a watcher ends up measuring the silence of a
+    conversation that has already been replaced."""
+    old = tmp_path / "old.jsonl"
+    old.write_text("{}", encoding="utf-8")
+    unborn = tmp_path / "not-yet.jsonl"
+    hook.mark_started(str(project_dir), str(unborn))
 
-    assert watch.transcript_path(str(project_dir), str(known)) == str(known)
+    assert watch.transcript_path(str(project_dir), str(old)) == str(unborn)
+
+
+def test_a_fresh_session_is_not_wiped_before_it_has_spoken(project_dir, tmp_path):
+    """AC negative: the live incident. The transcript does not exist yet, so
+    the chat looks silent — and a silent chat with a full window is exactly
+    what this mechanism types into."""
+    hook.mark_started(str(project_dir), str(tmp_path / "not-yet.jsonl"))
+
+    quiet = watch.idle_seconds(watch.transcript_path(str(project_dir)))
+
+    assert quiet is None
+    assert watch.should_act(99, threshold=30, quiet_for=quiet) is False
+
+
+# --- finding the folder at all ---------------------------------------------
+
+
+def test_the_slug_is_built_the_way_claude_names_the_folder():
+    """The defect that switched off the "somebody is typing" check entirely:
+    `_` was left alone, so the search asked for a folder that does not exist."""
+    assert presence.project_slug(r"D:\Claude_mcp") == "D--Claude-mcp"
+    assert "_" not in presence.project_slug(r"D:\one_two\three.four")
+
+
+def test_a_project_whose_name_contains_ours_is_not_ours(tmp_path, monkeypatch):
+    """AC negative: scratchpad projects created inside a project carry its whole
+    slug in their own names. A `*slug*` match reaches them, and then "is anyone
+    talking?" is answered about a different chat."""
+    projects = tmp_path / ".claude" / "projects"
+    ours = projects / "D--Claude-mcp"
+    theirs = projects / "C--Temp-D--Claude-mcp-scratchpad"
+    for folder in (ours, theirs):
+        folder.mkdir(parents=True)
+    (ours / "mine.jsonl").write_text("{}", encoding="utf-8")
+    (theirs / "stranger.jsonl").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(presence.os.path, "expanduser", lambda p: p.replace("~", str(tmp_path), 1))
+    monkeypatch.setattr(presence, "project_slug", lambda _d: "D--Claude-mcp")
+
+    found = presence.newest_transcript(presence.transcript_dir("ignored"))
+
+    assert found == str(ours / "mine.jsonl")
+
+
+def test_a_project_with_no_transcript_folder_says_so(tmp_path, monkeypatch):
+    monkeypatch.setattr(presence.os.path, "expanduser", lambda p: p.replace("~", str(tmp_path), 1))
+
+    assert presence.transcript_dir(str(tmp_path / "nowhere")) is None
+
+
+# --- the last look before typing -------------------------------------------
+
+
+def spin_watch(monkeypatch, project_dir, screens, ticks=3, quiet=600.0):
+    """Run the loop for a few ticks with everything but the draft check fixed:
+    the window is full, the transcript is quiet, the chat is alive."""
+    clock = iter([0.0, 10.0, 20.0, 30.0])
+    beats = iter([True] * ticks + [False])
+    ran = []
+    monkeypatch.setattr(watch.keys, "pid_exists", lambda _pid: True)
+    monkeypatch.setattr(watch, "alive", lambda _pid: next(beats))
+    monkeypatch.setattr(watch, "reading", lambda _p: 99)
+    monkeypatch.setattr(watch, "transcript_path", lambda *_a: "chat.jsonl")
+    monkeypatch.setattr(watch, "idle_seconds", lambda *_a, **_k: quiet)
+    monkeypatch.setattr(watch.keys, "console_text", lambda _pid: next(screens))
+    monkeypatch.setattr(watch.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(watch.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(watch, "run_sequence", lambda *_a: ran.append("sequence") or True)
+    watch.watch(str(project_dir), pid=111, threshold=30)
+    return ran, (project_dir / ".tausik" / "chat-watch.log").read_text(encoding="utf-8")
+
+
+def test_a_draft_typed_during_the_countdown_stops_the_wipe(project_dir, monkeypatch):
+    """AC negative: the input line is the one place the transcript cannot see.
+    Fifteen seconds of "silence" can be fifteen seconds of typing."""
+    ran, journal = spin_watch(monkeypatch, project_dir, iter(["> прив", "> привет"]))
+
+    assert ran == []
+    assert "человек печатает" in journal
+
+
+def test_a_still_screen_lets_the_cleanup_through(project_dir, monkeypatch):
+    """The guard must not become a permanent refusal — a chat nobody touched
+    still gets cleaned."""
+    ran, _journal = spin_watch(monkeypatch, project_dir, iter(["> ", "> "]))
+
+    assert ran == ["sequence"]
+
+
+def test_a_watcher_that_cannot_see_the_transcript_says_so(project_dir, monkeypatch):
+    """Going blind is the state in which this mechanism does nothing at all —
+    and a silent watcher that never acts looks exactly like a working one."""
+    ran, journal = spin_watch(monkeypatch, project_dir, iter(["> ", "> "]), quiet=None)
+
+    assert ran == []
+    assert "считаю, что человек в чате" in journal

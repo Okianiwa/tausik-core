@@ -24,16 +24,17 @@ import sys
 import time
 
 import autoloop_keys as keys
+from autoloop_presence import idle_seconds, transcript_path
 from tausik_utils import tausik_config_path
 from autoloop_chat_cycle import (
     ARM_SECONDS,
     DELIVERY_ATTEMPTS,
     KEY_SETTLE,
-    SEQUENCE,
     Maintenance,
     clear_ready,
     clear_started,
     confirm,
+    draft_changed,
     needs_maintenance,
     sequence,
     wait_ready,
@@ -89,62 +90,12 @@ def reading(project_dir: str, max_age=MAX_READING_AGE, now=None):
     return newest
 
 
-SESSION_FILE = os.path.join(".tausik", ".chat.session")
-
-
-def current_session(project_dir: str):
-    """The transcript of the session running right now, as named by the last
-    SessionStart hook. Outlives `known`: after a wipe the conversation
-    continues in a different file."""
-    try:
-        with open(os.path.join(project_dir, SESSION_FILE), encoding="utf-8") as f:
-            path = f.read().strip()
-    except OSError:
-        return None
-    return path if path and os.path.exists(path) else None
-
-
-def transcript_path(project_dir: str, known: str | None = None):
-    """This session's log.
-
-    Never "the newest file in the project": that one may belong to another
-    chat, and then "is anyone talking?" gets answered about the wrong person.
-    """
-    live = current_session(project_dir)
-    if live:
-        return live
-    if known and os.path.exists(known):
-        return known
-    slug = project_dir.replace(":", "-").replace("\\", "-").replace("/", "-")
-    pattern = os.path.expanduser(f"~/.claude/projects/*{slug.lstrip('-')}*/*.jsonl")
-    newest, newest_mtime = None, -1.0
-    for path in glob.glob(pattern):
-        try:
-            mtime = os.path.getmtime(path)
-        except OSError:
-            continue
-        if mtime > newest_mtime:
-            newest, newest_mtime = path, mtime
-    return newest
-
-
-def idle_seconds(path, now=None) -> float:
-    """How long the conversation has been quiet. No transcript means no
-    evidence of use — treated as idle, since a chat that writes nothing also
-    loses nothing."""
-    now = time.time() if now is None else now
-    if not path:
-        return float("inf")
-    try:
-        return max(0.0, now - os.path.getmtime(path))
-    except OSError:
-        return float("inf")
-
-
 def should_act(percent, threshold, quiet_for, idle_needed=IDLE_SECONDS) -> bool:
-    """Full window AND nobody typing. Either alone is not enough: acting on a
-    live conversation wipes it mid-sentence, and acting without a measurement
-    is acting blind."""
+    """Full window AND provably nobody typing. Either alone is not enough:
+    acting on a live conversation wipes it mid-sentence, and acting without a
+    measurement is acting blind. Not knowing counts as a live conversation."""
+    if quiet_for is None:
+        return False
     return needs_maintenance(percent, threshold) and quiet_for >= idle_needed
 
 
@@ -298,24 +249,53 @@ def watch(
     log(project_dir, f"старт: pid={pid}, порог {threshold}%")
     clear_ready(project_dir)
 
+    blind, armed_screen = False, None
     try:
         while alive(pid):
             if os.path.exists(os.path.join(project_dir, STOP_FILE)):
                 log(project_dir, "остановлен файлом-стопом")
                 return 0
             percent = reading(project_dir)
-            quiet = idle_seconds(transcript_path(project_dir, transcript))
+            path = transcript_path(project_dir, transcript)
+            quiet = idle_seconds(path)
             now = time.monotonic()
 
-            if should_act(percent, threshold, quiet) and cycle.consider(percent, now):
+            # Said once, and again only when it changes. This is the state in
+            # which the watcher does nothing at all, and a watcher that does
+            # nothing silently is indistinguishable from a working one.
+            if (quiet is None) != blind:
+                blind = quiet is None
                 log(
-                    project_dir, f"окно на {percent}%, тишина {int(quiet)} с — жду 15 с"
+                    project_dir,
+                    f"транскрипт не читается ({path or 'путь неизвестен'}) — "
+                    "считаю, что человек в чате, уборки не будет"
+                    if blind
+                    else "транскрипт снова читается — наблюдение восстановлено",
                 )
-            if cycle.state != "idle" and quiet < IDLE_SECONDS and cycle.cancel(now=now):
+
+            if should_act(percent, threshold, quiet) and cycle.consider(percent, now):
+                armed_screen = keys.console_text(pid)
+                log(
+                    project_dir,
+                    f"окно на {percent}%, тишина {int(quiet)} с — жду {int(ARM_SECONDS)} с",
+                )
+            if (
+                cycle.state != "idle"
+                and (quiet is None or quiet < IDLE_SECONDS)
+                and cycle.cancel(now=now)
+            ):
                 # Someone started talking during the countdown; their turn wins.
                 log(project_dir, "отменено: человек вернулся в чат")
             if cycle.due(now):
-                run_sequence(project_dir, pid, cycle)
+                # The last look before typing. A draft grows without touching
+                # the transcript, so this comparison is the only thing standing
+                # between the sequence and an input line still in use.
+                if draft_changed(armed_screen, keys.console_text(pid)):
+                    cycle.cancel(now=now)
+                    log(project_dir, "отменено: экран чата изменился — человек печатает")
+                else:
+                    run_sequence(project_dir, pid, cycle)
+                armed_screen = None
             time.sleep(POLL_SECONDS)
     finally:
         release_lock(project_dir)

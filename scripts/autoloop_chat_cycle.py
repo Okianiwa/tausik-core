@@ -142,6 +142,21 @@ def needs_maintenance(percent, threshold) -> bool:
     return percent >= threshold
 
 
+def draft_changed(before, after) -> bool:
+    """Did the screen move while the countdown ran?
+
+    Only a comparison, never a reading of the input line itself: a chat that
+    shows a hint where the draft would be looks "occupied" forever, and a
+    watcher that believes it never cleans anything again. Two screens that
+    differ, though, mean somebody is at the keyboard right now — the one case
+    the transcript's mtime cannot see.
+
+    A snapshot that is missing on either side answers False: not looking is
+    not evidence of stillness, and the mtime check still stands behind this.
+    """
+    return bool(before) and bool(after) and before != after
+
+
 def read_lock(project_dir: str):
     try:
         with open(os.path.join(project_dir, LOCK_FILE), encoding="utf-8") as f:
@@ -178,9 +193,7 @@ class Maintenance:
     wipes the conversation from under the person typing into it.
     """
 
-    def __init__(
-        self, threshold=30, arm_seconds=ARM_SECONDS, ready_timeout=READY_TIMEOUT
-    ):
+    def __init__(self, threshold=30, arm_seconds=ARM_SECONDS, ready_timeout=READY_TIMEOUT):
         self.threshold = threshold
         self.arm_seconds = arm_seconds
         self.ready_timeout = ready_timeout
@@ -250,9 +263,7 @@ class Maintenance:
         for command, trace in SEQUENCE:
             send(command)
             landed = (
-                confirm(trace)
-                if confirm
-                else (trace != WAIT_TURN or ready(self.ready_timeout))
+                confirm(trace) if confirm else (trace != WAIT_TURN or ready(self.ready_timeout))
             )
             if not landed:
                 return stop(command)

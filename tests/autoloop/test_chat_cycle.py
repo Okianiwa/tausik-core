@@ -201,3 +201,24 @@ def test_a_live_lock_blocks_a_second_driver():
 def test_a_lock_from_a_dead_driver_does_not_block():
     assert cycle.lock_is_stale(1234, running_pids=[]) is True
     assert cycle.lock_is_stale(None, running_pids=[999]) is True
+
+
+# --- the draft nobody has sent yet ----------------------------------------
+
+
+def test_a_screen_that_moved_means_somebody_is_typing():
+    """The transcript's mtime moves only when a turn is sent, so a person a
+    minute into a long message reads as a person who left."""
+    assert cycle.draft_changed("> прив", "> привет, мир") is True
+
+
+def test_a_still_screen_is_not_an_objection():
+    assert cycle.draft_changed("> ", "> ") is False
+
+
+def test_a_screen_nobody_could_read_is_not_an_objection():
+    """AC negative: a failed screen read must not freeze the mechanism for
+    good — the mtime check still stands behind it."""
+    assert cycle.draft_changed(None, "> черновик") is False
+    assert cycle.draft_changed("> черновик", None) is False
+    assert cycle.draft_changed(None, None) is False
