@@ -153,6 +153,10 @@ class TestCmdPushOkE2E:
         ticket_path = project / ".git" / TICKET_FILENAME
         assert ticket_path.exists()
         assert not (tausik_dir / TICKET_FILENAME).exists()
+        # Nor may the run leave a database behind: `push-ok` is issued from
+        # whichever repository is being pushed, and a stray `.tausik/tausik.db`
+        # makes that checkout read as an unregistered TAUSIK project.
+        assert not (tausik_dir / "tausik.db").exists()
         data = json.loads(ticket_path.read_text(encoding="utf-8"))
         assert data["schema_version"] == SCHEMA_VERSION
         assert data["branch"] == "main"

@@ -11,6 +11,10 @@ _script_dir = os.path.dirname(os.path.abspath(__file__))
 if _script_dir not in sys.path:
     sys.path.insert(0, _script_dir)
 
+# Commands whose handlers take no service. Opening the database for these
+# would create a `.tausik/` wherever the CLI happens to run.
+_NO_DB_COMMANDS = frozenset({"push-ok"})
+
 
 def main() -> None:
     from tausik_utils import fix_stdio_encoding, install_file_logging
@@ -155,7 +159,12 @@ def main() -> None:
 
     from skill_manager import SkillManagerError
 
-    svc = get_service()
+    # `push-ok` is run inside whichever repository is being pushed — often not
+    # a TAUSIK project at all. Opening the service there would create a
+    # `.tausik/` with an empty database in someone else's checkout, which then
+    # reads as an unregistered TAUSIK project (the factory's registry eval
+    # catches it). The handler takes no service; don't build one.
+    svc = None if args.command in _NO_DB_COMMANDS else get_service()
     try:
         fn(svc, args)
     except (ServiceError, SkillManagerError) as e:
@@ -168,7 +177,8 @@ def main() -> None:
         print("\nInterrupted.", file=sys.stderr)
         sys.exit(130)
     finally:
-        svc.be.close()
+        if svc is not None:
+            svc.be.close()
 
 
 if __name__ == "__main__":
