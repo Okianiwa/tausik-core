@@ -41,6 +41,7 @@ from autoloop_chat_cycle import (
 )
 
 LOG_FILE = os.path.join(".tausik", "chat-watch.log")
+ERR_FILE = os.path.join(".tausik", "chat-watch.err.log")
 LOCK_FILE = os.path.join(".tausik", ".chat-watch.lock")
 STOP_FILE = os.path.join(".tausik", ".chat-watch.stop")
 
@@ -313,20 +314,42 @@ def soft_threshold(project_dir: str, default=30):
 
 def spawn(project_dir: str, pid: int, transcript: str | None = None) -> None:
     """Start a detached watcher. Called from the SessionStart hook, so it must
-    return instantly and never hold the chat's startup."""
+    return instantly and never hold the chat's startup.
+
+    All three streams are redirected, and stdout/stderr are the ones that
+    matter. The host reads a hook's output through a pipe and waits for EOF;
+    an unredirected `Popen` hands the child a copy of that pipe's write end,
+    and a watcher that lives for hours never lets it close. The hook has long
+    exited, the host is still waiting for it — and while it waits, the human's
+    input line will not take a word. Measured: EOF never arrived in 8 seconds
+    unredirected, and immediately once redirected.
+
+    Errors go to a file rather than to nowhere: a watcher that dies on an
+    exception used to leave no trace at all, since its log line is only
+    written by code that got the chance to run.
+    """
     command = [sys.executable, os.path.abspath(__file__), "--pid", str(pid)]
     if transcript:
         command += ["--transcript", transcript]
     try:
+        errors = open(os.path.join(project_dir, ERR_FILE), "a", encoding="utf-8")
+    except OSError:
+        errors = subprocess.DEVNULL
+    try:
         subprocess.Popen(
             command,
             stdin=subprocess.DEVNULL,  # nothing to read; an inherited stdin can hang the run
+            stdout=subprocess.DEVNULL,
+            stderr=errors,
             cwd=project_dir,
             creationflags=0x00000008 | 0x00000200,  # DETACHED_PROCESS | NEW_GROUP
             close_fds=True,
         )
     except (OSError, ValueError) as exc:
         log(project_dir, f"не удалось поднять наблюдателя: {exc}")
+    finally:
+        if hasattr(errors, "close"):
+            errors.close()
 
 
 def main(argv: list[str]) -> int:

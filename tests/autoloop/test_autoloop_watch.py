@@ -455,3 +455,36 @@ def test_a_watcher_that_cannot_see_the_transcript_says_so(project_dir, monkeypat
 
     assert ran == []
     assert "считаю, что человек в чате" in journal
+
+
+# --- the pipe the host is still waiting on ---------------------------------
+
+
+def spawned_with(monkeypatch, project_dir):
+    seen = {}
+    monkeypatch.setattr(watch.subprocess, "Popen", lambda _cmd, **kw: seen.update(kw))
+    watch.spawn(str(project_dir), 111)
+    return seen
+
+
+def test_the_watcher_never_inherits_the_hooks_pipes(project_dir, monkeypatch):
+    """AC negative: the host reads a hook's output through a pipe and waits for
+    EOF. An unredirected Popen hands the detached child a copy of that pipe's
+    write end, and a watcher living for hours never lets it close — the hook
+    has exited, the host is still waiting, and the human's input line takes
+    nothing. Measured: EOF never arrived in 8 s unredirected, immediately once
+    redirected. Two live sessions were lost to this before it was found."""
+    seen = spawned_with(monkeypatch, project_dir)
+
+    assert seen["stdin"] == watch.subprocess.DEVNULL
+    assert seen["stdout"] == watch.subprocess.DEVNULL
+    assert seen.get("stderr") is not None  # redirected somewhere, never inherited
+
+
+def test_a_watcher_that_dies_leaves_a_trace(project_dir, monkeypatch):
+    """Its own log line is written by code that got to run; a process killed by
+    an exception writes nothing there at all."""
+    seen = spawned_with(monkeypatch, project_dir)
+
+    assert seen["stderr"] != watch.subprocess.DEVNULL
+    assert (project_dir / ".tausik" / "chat-watch.err.log").exists()

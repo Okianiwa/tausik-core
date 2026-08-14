@@ -10,6 +10,17 @@ import autoloop_keys as keys
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def elsewhere(tmp_path, monkeypatch):
+    """Keep the suite out of the live journal.
+
+    `journal()` writes relative to the working directory, so a test run from a
+    real project appends to the log of a chat that is running right now — three
+    fake deliveries to pid 999999 turned up there before this was noticed.
+    """
+    monkeypatch.chdir(tmp_path)
+
+
 def chars_of(records):
     """The characters a console would see, ignoring key-up halves."""
     return "".join(r.Event.KeyEvent.uChar.UnicodeChar for r in records if r.Event.KeyEvent.bKeyDown)
