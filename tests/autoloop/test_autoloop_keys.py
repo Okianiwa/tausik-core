@@ -29,30 +29,29 @@ def chars_of(records):
 def test_every_key_is_pressed_and_released():
     """A console reading raw key events sees a press without a release as a
     key still held down."""
-    records = keys.key_records("аб", submit=False)
+    records = keys.key_records("аб")
 
     assert len(records) == 4
     assert [bool(r.Event.KeyEvent.bKeyDown) for r in records] == [True, False] * 2
 
 
 def test_the_text_arrives_as_typed():
-    assert chars_of(keys.key_records("Привет, мир", submit=False)) == "Привет, мир"
+    assert chars_of(keys.key_records("Привет, мир")) == "Привет, мир"
 
 
-def test_enter_comes_last_and_is_a_real_return_key():
+def test_enter_is_a_real_return_key():
     """Submitting is a key with a virtual code, not just a carriage return
     character — the chat distinguishes them."""
-    records = keys.key_records("да")
+    records = keys.key_records(keys.ENTER)
 
-    assert records[-1].Event.KeyEvent.wVirtualKeyCode == keys.VK_RETURN
-    assert records[-2].Event.KeyEvent.wVirtualKeyCode == keys.VK_RETURN
-    assert bool(records[-2].Event.KeyEvent.bKeyDown) is True
+    assert [r.Event.KeyEvent.wVirtualKeyCode for r in records] == [keys.VK_RETURN] * 2
+    assert bool(records[0].Event.KeyEvent.bKeyDown) is True
 
 
-def test_without_submit_nothing_is_sent():
+def test_text_carries_no_enter_of_its_own():
     """Typing text and sending it are separate decisions: a command may need
     to sit in the input line unsent."""
-    records = keys.key_records("черновик", submit=False)
+    records = keys.key_records("черновик")
 
     codes = {r.Event.KeyEvent.wVirtualKeyCode for r in records}
     assert keys.VK_RETURN not in codes
@@ -78,6 +77,89 @@ class FakeKernel:
             return 1
 
         return call
+
+
+class WritingKernel(FakeKernel):
+    """Remembers each write, so a test can tell the two of them apart."""
+
+    def __init__(self):
+        super().__init__()
+        self.writes = []
+
+    def WriteConsoleInputW(self, _handle, buffer, length, _written):
+        self.calls.append("WriteConsoleInputW")
+        self.writes.append(chars_of(buffer[:length]))
+        return 1
+
+
+def writing_console(monkeypatch, kernel=None):
+    fake = kernel or WritingKernel()
+    monkeypatch.setattr(keys, "kernel32", lambda: fake)
+    monkeypatch.setattr(keys, "pid_exists", lambda _pid: True)
+    return fake
+
+
+# --- the text and the Enter --------------------------------------------------
+
+
+def test_the_text_and_the_enter_are_two_separate_writes(monkeypatch):
+    """The defect this split exists for: in one write the chat reads the Enter
+    as the tail of a paste and files it in the draft as a newline. `/clear` was
+    short enough to get away with it; a line of direction sat in the input box
+    unsent while the run above it went quiet."""
+    fake = writing_console(monkeypatch)
+
+    keys.send_to_console(20752, "Продолжай прогон", sleep=lambda _s: None)
+
+    assert fake.writes == ["Продолжай прогон", "\r"]
+
+
+def test_the_pause_between_them_is_real(monkeypatch):
+    """AC negative: with no pause both writes land in the same read and the
+    split buys nothing — the Enter is back inside the paste."""
+    writing_console(monkeypatch)
+    slept = []
+
+    keys.send_to_console(20752, "текст", sleep=slept.append)
+
+    assert slept == [keys.SUBMIT_DELAY]
+    assert keys.SUBMIT_DELAY > 0
+
+
+def test_the_console_is_given_back_between_the_two_writes(monkeypatch):
+    """Holding somebody's console across the pause would send everything this
+    process prints into their window."""
+    fake = writing_console(monkeypatch)
+
+    keys.send_to_console(20752, "текст", sleep=lambda _s: None)
+
+    assert fake.calls.count("FreeConsole") == 4  # detach + reattach, twice
+
+
+def test_a_failed_text_write_cancels_the_enter(monkeypatch):
+    """AC negative: after a write that failed, what sits in that input line is
+    unknown — an Enter on top of it sends a human's draft."""
+
+    class RefusingWrite(WritingKernel):
+        def WriteConsoleInputW(self, *_args):
+            self.calls.append("WriteConsoleInputW")
+            return 0
+
+    fake = writing_console(monkeypatch, RefusingWrite())
+
+    sent, reason = keys.send_to_console(20752, "текст", sleep=lambda _s: None)
+
+    assert sent is False
+    assert "WriteConsoleInput" in reason
+    assert fake.calls.count("WriteConsoleInputW") == 1  # the Enter never went
+
+
+def test_nothing_is_typed_when_submit_is_off(monkeypatch):
+    fake = writing_console(monkeypatch)
+
+    keys.send_to_console(20752, "\x1b", submit=False, sleep=lambda _s: None)
+
+    assert fake.writes == ["\x1b"]
 
 
 def test_a_dead_pid_is_refused_before_anything_is_written(monkeypatch):
@@ -154,12 +236,25 @@ def test_every_delivery_is_written_down(project_dir, monkeypatch):
     monkeypatch.setattr(keys, "kernel32", lambda: FakeKernel())
     monkeypatch.setattr(keys, "pid_exists", lambda _pid: True)
 
-    keys.send_to_console(20752, "/checkpoint")
+    keys.send_to_console(20752, "/checkpoint", sleep=lambda _s: None)
 
     line = journal_of(project_dir)
     assert "pid=20752" in line
     assert "/checkpoint" in line
     assert "отправлено" in line
+
+
+def test_the_enter_is_written_down_as_its_own_delivery(project_dir, monkeypatch):
+    """Two writes into a human's console, two lines. The run of 17:24 logged
+    one line covering both, so a text that arrived and an Enter that did not
+    were indistinguishable in the only record there was."""
+    monkeypatch.chdir(project_dir)
+    writing_console(monkeypatch)
+
+    keys.send_to_console(20752, "/checkpoint", sleep=lambda _s: None)
+
+    assert "<Enter>" in journal_of(project_dir)
+    assert len(journal_of(project_dir).strip().splitlines()) == 2
 
 
 def test_esc_is_named_rather_than_written_raw(project_dir, monkeypatch):
@@ -193,7 +288,7 @@ def test_a_project_without_tausik_is_not_littered(tmp_path, monkeypatch):
     monkeypatch.setattr(keys, "kernel32", lambda: FakeKernel())
     monkeypatch.setattr(keys, "pid_exists", lambda _pid: True)
 
-    keys.send_to_console(20752, "/start")
+    keys.send_to_console(20752, "/start", sleep=lambda _s: None)
 
     assert list(tmp_path.iterdir()) == []
 

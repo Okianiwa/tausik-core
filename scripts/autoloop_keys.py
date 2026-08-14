@@ -36,6 +36,12 @@ INVALID_HANDLE = ctypes.c_void_p(-1).value
 # Control characters a console expects as keys, not as text.
 VK_BY_CHAR = {"\r": VK_RETURN, "\n": VK_RETURN, "\x1b": VK_ESCAPE}
 
+ENTER = "\r"
+# The pause between the text and the Enter that sends it. Not cosmetic: a chat
+# reading its input in one gulp treats a large block ending in Enter as pasted
+# multi-line text, and the Enter becomes a newline inside the draft instead of
+# sending it. Short commands survived this by being short — the first long line
+# the watcher typed sat in the input box unsent.
 SUBMIT_DELAY = 0.4
 INPUT_LINES = 12  # enough of the screen bottom to hold a multi-line draft
 
@@ -97,11 +103,15 @@ def kernel32():
         return None
 
 
-def key_records(text: str, submit: bool = True) -> list:
-    """One key-down/key-up pair per character, Enter last.
+def key_records(text: str) -> list:
+    """One key-down/key-up pair per character.
 
     Both halves matter: a console reading key events sees a press that never
     ended as a key still held down.
+
+    Enter is not a special case here — `key_records(ENTER)` produces exactly
+    the keystroke a human's Return key does, and sending it is a separate
+    decision made by the caller.
     """
     records = []
     for char in text:
@@ -115,17 +125,6 @@ def key_records(text: str, submit: bool = True) -> list:
             record.Event.KeyEvent.wVirtualKeyCode = VK_BY_CHAR.get(char, 0)
             record.Event.KeyEvent.wVirtualScanCode = 0
             record.Event.KeyEvent.uChar.UnicodeChar = char
-            record.Event.KeyEvent.dwControlKeyState = 0
-            records.append(record)
-    if submit:
-        for down in (True, False):
-            record = INPUT_RECORD()
-            record.EventType = KEY_EVENT
-            record.Event.KeyEvent.bKeyDown = down
-            record.Event.KeyEvent.wRepeatCount = 1
-            record.Event.KeyEvent.wVirtualKeyCode = VK_RETURN
-            record.Event.KeyEvent.wVirtualScanCode = 0
-            record.Event.KeyEvent.uChar.UnicodeChar = "\r"
             record.Event.KeyEvent.dwControlKeyState = 0
             records.append(record)
     return records
@@ -177,32 +176,20 @@ def attached(k32, pid: int):
         _reattach(k32)
 
 
-def send_to_console(pid: int, text: str, submit: bool = True) -> tuple[bool, str]:
-    """Push `text` into the console owned by `pid`. Returns (sent, reason).
+def _write_keys(k32, pid: int, records: list) -> tuple[bool, str]:
+    """One attach → write → detach. Returns (written, reason).
 
-    Refuses on a PID that is not running: attaching to a recycled PID would
-    type into a stranger.
-
-    Every outcome is journalled, including the refusals. This is the only
-    record that a key was ever pushed into a human's window; without it, an
-    input line that emptied itself has no way to accuse — or clear — this code.
+    A separate attachment per write rather than one long one: between the text
+    and the Enter this process would otherwise hold a human's console for
+    SUBMIT_DELAY, and everything it printed meanwhile would land in their
+    window.
     """
-    label = f"клавиши → pid={pid} «{readable(text)}»{'+Enter' if submit else ''}"
-    k32 = kernel32()
-    if k32 is None:
-        journal(f"{label}: Windows console API недоступен")
-        return False, "Windows console API недоступен"
-    if not pid_exists(pid):
-        journal(f"{label}: процесс не найден")
-        return False, f"процесс {pid} не найден — писать некуда"
-
-    records = key_records(text, submit)
+    if not records:
+        return True, ""
     buffer = (INPUT_RECORD * len(records))(*records)
     written = wintypes.DWORD(0)
-
     with attached(k32, pid) as (console, denied):
         if console is None:
-            journal(f"{label}: {denied}")
             return False, denied
         handle = console.CreateFileW(
             "CONIN$",
@@ -214,15 +201,45 @@ def send_to_console(pid: int, text: str, submit: bool = True) -> tuple[bool, str
             None,
         )
         if handle in (None, 0, INVALID_HANDLE):
-            ok, reason = False, "CONIN$ не открылся"
-        else:
-            ok = bool(
-                console.WriteConsoleInputW(handle, buffer, len(records), ctypes.byref(written))
-            )
-            reason = "" if ok else "WriteConsoleInput вернул ошибку"
-            console.CloseHandle(handle)
+            return False, "CONIN$ не открылся"
+        ok = bool(console.WriteConsoleInputW(handle, buffer, len(records), ctypes.byref(written)))
+        console.CloseHandle(handle)
+        return ok, "" if ok else "WriteConsoleInput вернул ошибку"
 
+
+def send_to_console(pid: int, text: str, submit: bool = True, sleep=time.sleep) -> tuple[bool, str]:
+    """Push `text` into the console owned by `pid`. Returns (sent, reason).
+
+    The text and the Enter that sends it are two writes, never one block —
+    see SUBMIT_DELAY for what one block costs.
+
+    Refuses on a PID that is not running: attaching to a recycled PID would
+    type into a stranger. A failed text write cancels the Enter — pressing
+    Return over an input line whose contents are now unknown would send
+    somebody else's draft.
+
+    Every outcome is journalled, including the refusals and the Enter as its
+    own line. This is the only record that a key was ever pushed into a human's
+    window; without it, an input line that emptied itself has no way to
+    accuse — or clear — this code.
+    """
+    label = f"клавиши → pid={pid} «{readable(text)}»"
+    k32 = kernel32()
+    if k32 is None:
+        journal(f"{label}: Windows console API недоступен")
+        return False, "Windows console API недоступен"
+    if not pid_exists(pid):
+        journal(f"{label}: процесс не найден")
+        return False, f"процесс {pid} не найден — писать некуда"
+
+    ok, reason = _write_keys(k32, pid, key_records(text))
     journal(f"{label}: {reason or 'отправлено'}")
+    if not submit or not ok:
+        return ok, reason
+
+    sleep(SUBMIT_DELAY)
+    ok, reason = _write_keys(k32, pid, key_records(ENTER))
+    journal(f"клавиши → pid={pid} «<Enter>»: {reason or 'отправлено'}")
     return ok, reason
 
 

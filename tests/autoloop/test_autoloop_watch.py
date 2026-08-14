@@ -512,9 +512,9 @@ def test_a_watcher_leaves_when_the_run_is_taken_away(project_dir, monkeypatch):
 
 def test_the_continuation_is_typed_once_and_never_repeated(project_dir, keyboard, monkeypatch):
     """AC negative: this step starts work that runs for as long as the work
-    takes. A retry would land Esc and a duplicate command on an agent mid-edit
-    — the retry that protects the other steps is the worst thing that could
-    happen to this one."""
+    takes. A retry would land a duplicate command on an agent mid-edit — the
+    retry that protects the other steps is the worst thing that could happen
+    to this one."""
     monkeypatch.setattr(watch, "confirm", lambda *_a, **_k: False)
 
     watch.deliver(
@@ -522,7 +522,16 @@ def test_the_continuation_is_typed_once_and_never_repeated(project_dir, keyboard
     )
 
     assert keyboard.typed.count("Продолжай прогон. Направление: очередь") == 1
-    assert keyboard.typed.count(watch.ESC) == 1
+
+
+def test_the_continuation_does_not_press_escape_first(project_dir, keyboard):
+    """After `/start` the input line is empty, so Esc has nothing to clear —
+    what it does instead is interrupt a turn that is still drawing itself. The
+    run of 17:24 shows the cost: `Interrupted` where the fresh session's answer
+    should have been."""
+    watch.deliver(str(project_dir), 111, "Продолжай прогон", watch.WAIT_SPEAKING)
+
+    assert keyboard.typed == ["Продолжай прогон"]
 
 
 def test_the_other_steps_keep_their_retries(project_dir, keyboard, monkeypatch):
@@ -557,3 +566,22 @@ def test_a_delivery_is_measured_against_the_transcript_before_typing(
     watch.deliver(str(project_dir), 111, "Продолжай", watch.WAIT_SPEAKING)
 
     assert seen == ["measured", 7]
+
+
+def test_the_baseline_is_taken_after_the_draft_is_cleared(project_dir, keyboard, monkeypatch):
+    """Esc interrupts a turn that is still drawing, and the interruption is
+    written into the transcript. A baseline taken before it counts that growth
+    as the chat answering: the run of 17:24 reported the continuation delivered
+    in the same second it was typed, having confirmed itself against its own
+    Esc."""
+    events = []
+    monkeypatch.setattr(
+        watch.keys,
+        "send_to_console",
+        lambda _pid, text, submit=True: (events.append(text), (True, ""))[1],
+    )
+    monkeypatch.setattr(watch, "transcript_size", lambda *_a, **_k: events.append("measured") or 7)
+
+    watch.deliver(str(project_dir), 111, "/checkpoint", cycle_state.WAIT_TURN)
+
+    assert events == [watch.ESC, "measured", "/checkpoint"]

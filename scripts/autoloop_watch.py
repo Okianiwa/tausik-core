@@ -131,13 +131,23 @@ def deliver(project_dir: str, pid: int, command: str, trace: str):
         # Stale marks answer for the command that has not run yet.
         clear_ready(project_dir)
         clear_started(project_dir)
-        # Measured before typing: "the chat answered" means it grew past what
-        # it held when the command went in.
-        baseline = transcript_size(project_dir)
         # Esc first: the command must not glue itself onto a half-typed draft,
         # then a pause, or the console reads the two writes as one keystroke.
-        keys.send_to_console(pid, ESC, submit=False)
-        time.sleep(KEY_SETTLE)
+        #
+        # Except before the continuation. There the input line is empty — the
+        # session has just restarted — so Esc has nothing to clear, and what it
+        # does instead is interrupt a turn that is still drawing itself. It
+        # also writes the interruption into the transcript, which is the very
+        # thing this step waits on: the run of 17:24 logged the continuation as
+        # delivered in the same second it was typed, having confirmed itself
+        # against its own Esc.
+        if trace != WAIT_SPEAKING:
+            keys.send_to_console(pid, ESC, submit=False)
+            time.sleep(KEY_SETTLE)
+        # Measured after Esc and before the text: "the chat answered" has to
+        # mean it grew past what it held once everything this watcher does to
+        # it was already done.
+        baseline = transcript_size(project_dir)
         sent, reason = keys.send_to_console(pid, command)
         if not sent:
             return False, reason
