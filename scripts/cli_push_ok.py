@@ -107,16 +107,15 @@ def cmd_push_ok(_svc_unused: Any, args: Any) -> None:
     # became unauthorizable. Its git dir is the right home: always present,
     # never part of the working tree. Creating a `.tausik` there instead
     # would make the checkout look like an unregistered TAUSIK project.
-    tausik_dir = _find_tausik_dir()
+    git_dir = _git(["rev-parse", "--absolute-git-dir"])
+    tausik_dir = Path(git_dir) if git_dir else _find_tausik_dir()
     if tausik_dir is None:
-        git_dir = _git(["rev-parse", "--absolute-git-dir"])
-        if not git_dir:
-            print(
-                "error: no .tausik directory found — run `tausik init` first",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        tausik_dir = Path(git_dir)
+        print(
+            "error: no git repository and no .tausik directory here — run "
+            "`tausik push-ok` inside the repository you are pushing",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]) or ""
     path = write_push_ticket(
         tausik_dir, ttl_seconds=ttl, commit_sha=sha, branch=branch, repo_root=repo_root

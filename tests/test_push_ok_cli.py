@@ -147,8 +147,12 @@ class TestCmdPushOkE2E:
             timeout=15,
         )
         assert result.returncode == 0, result.stderr
-        ticket_path = tausik_dir / TICKET_FILENAME
+        # The ticket belongs to the repository being pushed, so it lives in
+        # its git dir — a checkout without TAUSIK of its own can be authorized
+        # too, and no stray `.tausik` appears in someone else's repository.
+        ticket_path = project / ".git" / TICKET_FILENAME
         assert ticket_path.exists()
+        assert not (tausik_dir / TICKET_FILENAME).exists()
         data = json.loads(ticket_path.read_text(encoding="utf-8"))
         assert data["schema_version"] == SCHEMA_VERSION
         assert data["branch"] == "main"

@@ -29,7 +29,7 @@ Source of truth: anywhere the code calls `os.getenv` / `os.environ` in `scripts/
 | Variable | Effect |
 |---|---|
 | `TAUSIK_SKIP_PUSH_HOOK=1` | `git_push_gate.py` becomes a no-op (debugging only). |
-| `TAUSIK_PUSH_TICKET_PATH=<abs path>` | Override the default `.tausik/.push_ticket.json` location. Used by the test suite. |
+| `TAUSIK_PUSH_TICKET_PATH=<abs path>` | Override the ticket location (default: the git dir of the repository being pushed). Used by the test suite. |
 | `TAUSIK_ALLOW_PUSH=1` | **No-op since v1.4** — the env-bypass path was removed (replaced by the single-use ticket file). Setting it does nothing; the gate now requires `tausik push-ok` to write a ticket. |
 | `TAUSIK_SKIP_MEMORY_HOOK=1` | Skips `memory_pretool_block.py` for a single tool call (rarely needed; safer to use `confirm: cross-project` in the prompt). |
 | `TAUSIK_BRAIN_HOOK_DEBUG=1` | Brain hooks log to stderr in addition to silent operation. |
