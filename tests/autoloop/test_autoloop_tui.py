@@ -526,15 +526,32 @@ class TestBothModesAreVisible:
         assert data["status"] == STATUS_IDLE
         assert data["iteration"] == 0
 
-    def test_a_stale_reading_is_not_the_current_state(self, project_dir):
-        """NEGATIVE: the last known percentage, shown without its age, reads as
-        now — the same trap the watcher already guards against."""
+    def test_an_ageing_reading_is_shown_with_its_age(self, project_dir):
+        """A reading is written when the agent's turn ends, so during a long
+        turn it ages on purpose. Blanking it there hid the real figure behind
+        an em dash for a whole run; window fill only grows, so the honest
+        answer is the number plus how old it is."""
         declare_chat_run(project_dir)
         write_state(str(project_dir), SESSION, {"percent": 42.0, "tokens": 1000})
         path = glob.glob(os.path.join(str(project_dir), ".tausik", "autoloop", "*.json"))[0]
-        old = os.path.getmtime(path) - (tui.MAX_READING_AGE_S + 60)
-        os.utime(path, (old, old))
-        assert collect(str(project_dir))["percent"] is None
+        stale = os.path.getmtime(path) - (tui.MAX_READING_AGE_S + 600)
+        os.utime(path, (stale, stale))
+        data = collect(str(project_dir))
+        assert data["percent"] == 42.0
+        assert data["reading_age_seconds"] > tui.MAX_READING_AGE_S
+        assert "мин назад" in render_text(data)
+
+    def test_no_reading_at_all_is_an_em_dash(self, project_dir):
+        """NEGATIVE: nothing measured is still nothing — no invented zero."""
+        declare_chat_run(project_dir)
+        data = collect(str(project_dir))
+        assert data["percent"] is None
+        assert data["reading_age_seconds"] is None
+
+    def test_a_fresh_reading_carries_no_caveat(self, project_dir):
+        declare_chat_run(project_dir)
+        write_state(str(project_dir), SESSION, {"percent": 42.0, "tokens": 1000})
+        assert "назад" not in render_text(collect(str(project_dir)))
 
     def test_a_fresh_reading_is_shown(self, project_dir):
         declare_chat_run(project_dir)

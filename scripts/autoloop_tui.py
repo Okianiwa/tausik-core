@@ -118,14 +118,11 @@ def caption(status: str, mode: str | None = None) -> str:
 # --- data layer -----------------------------------------------------------
 
 
-
-
 def _run_is_live(project_dir: str) -> bool:
     return run_state.mode(project_dir) is not None
 
 
-
-def _newest_state(project_dir: str, max_age_s: float = MAX_READING_AGE_S) -> dict:
+def _newest_state(project_dir: str) -> dict:
     """Freshest per-session reading. Absence is normal, not an error.
 
     A JSON file in that directory is not automatically a measurement: the loop
@@ -148,11 +145,13 @@ def _newest_state(project_dir: str, max_age_s: float = MAX_READING_AGE_S) -> dic
             continue
         if isinstance(data, dict) and "percent" in data:
             newest, newest_mtime = data, mtime
-    # A stale reading is history, not the current state — the same freshness
-    # rule the watcher applies before acting on one. Showing the last known
-    # number without saying how old it is reads as "this is now".
-    if newest and (time.time() - newest_mtime) > max_age_s:
-        return {}
+    # Age travels with the reading instead of erasing it. The watcher needs
+    # strict freshness — it decides whether to act; a window does not. A
+    # reading is written when the agent's turn ends, so during a long turn it
+    # ages on purpose, and blanking it there hid the real figure behind an em
+    # dash for the whole run. Window fill does not decay: it only grows.
+    if newest:
+        newest = dict(newest, age_seconds=max(0, int(time.time() - newest_mtime)))
     return newest
 
 
@@ -172,7 +171,6 @@ def _task_counts(project_dir: str) -> dict:
     for slug, status in rows:
         buckets.setdefault(str(status), []).append(str(slug))
     return buckets
-
 
 
 def _elapsed_seconds(entries: list[dict]) -> int:
@@ -239,6 +237,7 @@ def collect(project_dir: str, config: dict | None = None) -> dict:
         if live
         else 0,
         "percent": state.get("percent"),
+        "reading_age_seconds": state.get("age_seconds"),
         "soft_threshold": config.get("soft_threshold", 30),
         "tokens": summary["tokens"] if from_journal else unmeasured,
         "cost_usd": summary["cost_usd"] if from_journal else None,
@@ -327,6 +326,18 @@ def format_elapsed(seconds: int) -> str:
     return f"{hours}ч {minutes:02d}м" if hours else f"{minutes}м {sec:02d}с"
 
 
+def format_reading_age(seconds: int | None) -> str:
+    """How old the context reading is, said only when that matters.
+
+    Fresh readings need no caveat; an ageing one is still the truth about a
+    window that only grows, so it is shown with its age rather than withheld.
+    """
+    if seconds is None or seconds <= MAX_READING_AGE_S:
+        return ""
+    minutes = seconds // 60
+    return f" ({minutes} мин назад)" if minutes else f" ({seconds} с назад)"
+
+
 def format_cost(value: float | None) -> str:
     """Cost is journal-only: the in-chat run keeps no per-iteration ledger, so
     there the honest answer is an em dash, not $0.00."""
@@ -345,6 +356,7 @@ def render_text(data: dict) -> str:
         f"задача:   {data['current_task'] or '—'}",
         f"задачи    {progress_bar(done, active, total)}  {progress_label(done, active, total)}",
         f"контекст  {bar((data['percent'] or 0) / 100)}  {format_percent(data['percent'])}"
+        f"{format_reading_age(data.get('reading_age_seconds'))}"
         f"  (порог {int(data['soft_threshold'])}%)",
         f"работа    {journal.format_tokens(journal.work_tokens(tokens))} за прогон"
         f"  (выход {journal.format_tokens(tokens['output'])}"
