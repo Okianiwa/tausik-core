@@ -95,7 +95,7 @@ def body_markup(data: dict) -> str:
         f" [dim]за прогон · выход {journal.format_tokens(tokens['output'])}"
         f" · запись кэша {journal.format_tokens(tokens['cache_write'])}[/dim]\n"
         f"[dim]время[/dim]    {tui.format_elapsed(data['elapsed_seconds'])}"
-        f" [dim]· ${data['cost_usd']:.2f}[/dim]"
+        f" [dim]· {tui.format_cost(data['cost_usd'])}[/dim]"
     )
 
 

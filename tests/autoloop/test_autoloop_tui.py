@@ -451,3 +451,98 @@ def test_run_dashboard_without_a_terminal_prints_once(project_dir, capsys, monke
 
     assert screen.run_dashboard(str(project_dir)) == 0
     assert "autoloop" in capsys.readouterr().out
+
+
+# --- two modes: the queue in the chat, or the queue in separate agents ------
+
+
+def declare_chat_run(
+    project_dir, direction="доделать очередь", started_at="2026-05-01T10:00:00+00:00"
+):
+    (project_dir / ".tausik" / ".chat-loop.json").write_text(
+        json.dumps({"direction": direction, "started_at": started_at}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def log_cleanups(project_dir, count):
+    lines = []
+    for i in range(count):
+        lines += [
+            f"1{i}:00:00 /checkpoint выполнен",
+            f"1{i}:00:10 /clear выполнен",
+            f"1{i}:00:20 /start выполнен",
+        ]
+    (project_dir / ".tausik" / "chat-watch.log").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8"
+    )
+
+
+class TestBothModesAreVisible:
+    """The window used to read one marker only. Through an entire in-chat run
+    it announced «прогон не запущен» while showing a live context reading and
+    an iteration count left over from a run two days earlier."""
+
+    def test_a_run_in_the_chat_is_live(self, project_dir):
+        declare_chat_run(project_dir)
+        data = collect(str(project_dir))
+        assert data["mode"] == tui.MODE_CHAT
+        assert data["status"] == STATUS_RUNNING
+        assert data["caption"] != "прогон не запущен"
+        assert data["direction"] == "доделать очередь"
+
+    def test_a_run_in_agents_is_live(self, project_dir):
+        mark_running(project_dir)
+        make_entry(project_dir)
+        data = collect(str(project_dir))
+        assert data["mode"] == tui.MODE_AGENTS
+        assert data["status"] == STATUS_RUNNING
+
+    def test_agents_win_when_both_markers_exist(self, project_dir):
+        """The agents run is the one with processes actually turning."""
+        declare_chat_run(project_dir)
+        mark_running(project_dir)
+        make_entry(project_dir)
+        assert collect(str(project_dir))["mode"] == tui.MODE_AGENTS
+
+    def test_the_chat_counts_cleanups_where_agents_count_iterations(self, project_dir):
+        declare_chat_run(project_dir)
+        log_cleanups(project_dir, 3)
+        assert collect(str(project_dir))["iteration"] == 3
+
+    def test_journal_numbers_stay_out_of_the_chat_mode(self, project_dir):
+        """They describe an agents run — somebody else's, not this one."""
+        declare_chat_run(project_dir)
+        make_entry(project_dir, tokens={"output": 30, "cache_write": 10}, commits=["abc1234"])
+        data = collect(str(project_dir))
+        assert data["tokens"]["output"] is None
+        assert data["cost_usd"] is None
+        assert data["commits"] == []
+
+    def test_no_run_does_not_pass_a_past_iteration_off_as_current(self, project_dir):
+        """NEGATIVE: an idle project showed «итерация 3» from a finished run."""
+        make_entry(project_dir, iteration=3, status_after="done")
+        data = collect(str(project_dir))
+        assert data["status"] == STATUS_IDLE
+        assert data["iteration"] == 0
+
+    def test_a_stale_reading_is_not_the_current_state(self, project_dir):
+        """NEGATIVE: the last known percentage, shown without its age, reads as
+        now — the same trap the watcher already guards against."""
+        declare_chat_run(project_dir)
+        write_state(str(project_dir), SESSION, {"percent": 42.0, "tokens": 1000})
+        path = glob.glob(os.path.join(str(project_dir), ".tausik", "autoloop", "*.json"))[0]
+        old = os.path.getmtime(path) - (tui.MAX_READING_AGE_S + 60)
+        os.utime(path, (old, old))
+        assert collect(str(project_dir))["percent"] is None
+
+    def test_a_fresh_reading_is_shown(self, project_dir):
+        declare_chat_run(project_dir)
+        write_state(str(project_dir), SESSION, {"percent": 42.0, "tokens": 1000})
+        assert collect(str(project_dir))["percent"] == 42.0
+
+    def test_rendering_survives_a_chat_run(self, project_dir):
+        """Cost and tokens are journal-only; the text must render without them."""
+        declare_chat_run(project_dir)
+        text = render_text(collect(str(project_dir)))
+        assert "—" in text

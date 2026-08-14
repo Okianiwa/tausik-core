@@ -15,10 +15,12 @@ from __future__ import annotations
 import glob
 import json
 import os
+import time
 import sqlite3
 from datetime import datetime, timezone
 
 import autoloop_journal as journal
+import autoloop_run_state as run_state
 
 # Frames are the cat's whole vocabulary: what it is doing right now.
 CAT_WORKING = (
@@ -73,6 +75,11 @@ STATUS_IDLE = "idle"
 STATUS_STOPPED = "stopped"
 STATUS_FAILED = "failed"
 
+MODE_AGENTS = run_state.MODE_AGENTS
+MODE_CHAT = run_state.MODE_CHAT
+
+MAX_READING_AGE_S = 180
+
 _CAT_BY_STATUS = {
     STATUS_RUNNING: CAT_WORKING,
     STATUS_IDLE: CAT_IDLE,
@@ -93,22 +100,32 @@ def cat_frame(status: str, tick: int) -> str:
     return frames[tick % len(frames)].strip("\n")
 
 
-def caption(status: str) -> str:
-    return _CAPTION.get(status, "")
+_MODE_LABEL = {MODE_CHAT: "в чате", MODE_AGENTS: "агенты"}
+
+
+def caption(status: str, mode: str | None = None) -> str:
+    """What the run is doing, and — while one is going — which mode it is.
+
+    The two modes report different things (iterations against cleanups, a cost
+    ledger against none), so a viewer who cannot tell them apart reads the
+    wrong meaning into the same row of numbers.
+    """
+    text = _CAPTION.get(status, "")
+    label = _MODE_LABEL.get(mode or "")
+    return f"{label} · {text}" if label and text else text
 
 
 # --- data layer -----------------------------------------------------------
 
 
+
+
 def _run_is_live(project_dir: str) -> bool:
-    return os.path.exists(os.path.join(project_dir, ".tausik", ".autoloop.run"))
+    return run_state.mode(project_dir) is not None
 
 
-def _stop_requested(project_dir: str) -> bool:
-    return os.path.exists(os.path.join(project_dir, ".tausik", ".autoloop.stop"))
 
-
-def _newest_state(project_dir: str) -> dict:
+def _newest_state(project_dir: str, max_age_s: float = MAX_READING_AGE_S) -> dict:
     """Freshest per-session reading. Absence is normal, not an error.
 
     A JSON file in that directory is not automatically a measurement: the loop
@@ -131,6 +148,11 @@ def _newest_state(project_dir: str) -> dict:
             continue
         if isinstance(data, dict) and "percent" in data:
             newest, newest_mtime = data, mtime
+    # A stale reading is history, not the current state — the same freshness
+    # rule the watcher applies before acting on one. Showing the last known
+    # number without saying how old it is reads as "this is now".
+    if newest and (time.time() - newest_mtime) > max_age_s:
+        return {}
     return newest
 
 
@@ -152,6 +174,7 @@ def _task_counts(project_dir: str) -> dict:
     return buckets
 
 
+
 def _elapsed_seconds(entries: list[dict]) -> int:
     starts = [e.get("started_at") for e in entries if e.get("started_at")]
     if not starts:
@@ -171,11 +194,13 @@ def collect(project_dir: str, config: dict | None = None) -> dict:
     tasks = _task_counts(project_dir)
     summary = journal.summarize(project_dir)
 
-    live = _run_is_live(project_dir)
+    mode = run_state.mode(project_dir)
+    live = mode is not None
+    chat = mode == MODE_CHAT
     last = entries[-1] if entries else {}
     if live:
         status = STATUS_RUNNING
-    elif _stop_requested(project_dir):
+    elif run_state.stop_requested(project_dir):
         status = STATUS_STOPPED
     elif last.get("exit_reason") in ("crashed", "timeout") or (
         last.get("exit_reason") and last.get("status_after") != "done"
@@ -191,22 +216,43 @@ def collect(project_dir: str, config: dict | None = None) -> dict:
     active = tasks.get("active", [])
     total = len(queued) + len(done) + len(active) + len(tasks.get("blocked", []))
 
+    # Journal numbers describe the agents-mode run that wrote them, so in chat
+    # mode they belong to somebody else's run and are hidden. With no run at
+    # all they stay: totals of the last run are a report, and the caption says
+    # plainly that nothing is running. The iteration counter is the exception —
+    # "итерация 3" beside an idle cat reads as work happening right now.
+    from_journal = not chat
+    # Same shape, no numbers: an unmeasured count already renders as an em
+    # dash, so the window says "not measured" rather than a confident zero.
+    unmeasured = dict.fromkeys(("input", "output", "cache_read", "cache_write", "total"))
     return {
+        "mode": mode,
         "status": status,
-        "caption": caption(status),
-        "current_task": (last.get("task_slug") if live else None)
+        "caption": caption(status, mode),
+        "current_task": (
+            state.get("task_slug") if chat else last.get("task_slug") if live else None
+        )
         or (active[0] if active else None),
-        "iteration": last.get("iteration") or 0,
+        "iteration": run_state.cleanups_done(project_dir)
+        if chat
+        else (last.get("iteration") or 0)
+        if live
+        else 0,
         "percent": state.get("percent"),
         "soft_threshold": config.get("soft_threshold", 30),
-        "tokens": summary["tokens"],
-        "cost_usd": summary["cost_usd"],
-        "elapsed_seconds": _elapsed_seconds(entries),
+        "tokens": summary["tokens"] if from_journal else unmeasured,
+        "cost_usd": summary["cost_usd"] if from_journal else None,
+        "elapsed_seconds": _elapsed_seconds(entries)
+        if from_journal
+        else run_state.chat_elapsed(project_dir)
+        if chat
+        else 0,
         "tasks_done": done,
         "tasks_queued": queued,
         "tasks_active": active,
         "tasks_total": total,
-        "commits": summary["commits"],
+        "commits": summary["commits"] if from_journal else [],
+        "direction": run_state.chat_run(project_dir).get("direction") if chat else None,
         "entries": entries,
     }
 
@@ -276,9 +322,15 @@ def format_percent(percent) -> str:
 
 
 def format_elapsed(seconds: int) -> str:
-    minutes, sec = divmod(max(0, seconds), 60)
+    minutes, sec = divmod(max(0, seconds or 0), 60)
     hours, minutes = divmod(minutes, 60)
     return f"{hours}ч {minutes:02d}м" if hours else f"{minutes}м {sec:02d}с"
+
+
+def format_cost(value: float | None) -> str:
+    """Cost is journal-only: the in-chat run keeps no per-iteration ledger, so
+    there the honest answer is an em dash, not $0.00."""
+    return "—" if value is None else f"${value:.2f}"
 
 
 def render_text(data: dict) -> str:
@@ -297,7 +349,7 @@ def render_text(data: dict) -> str:
         f"работа    {journal.format_tokens(journal.work_tokens(tokens))} за прогон"
         f"  (выход {journal.format_tokens(tokens['output'])}"
         f" · запись кэша {journal.format_tokens(tokens['cache_write'])})",
-        f"время     {format_elapsed(data['elapsed_seconds'])} · ${data['cost_usd']:.2f}",
+        f"время     {format_elapsed(data['elapsed_seconds'])} · {format_cost(data['cost_usd'])}",
     ]
     if data["tasks_queued"]:
         lines.append(f"дальше:   {', '.join(data['tasks_queued'][:4])}")
