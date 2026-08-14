@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -126,9 +127,9 @@ TICKET_FILENAME = ".push_ticket.json"
 SCHEMA_VERSION = 1
 
 
-def _find_tausik_dir() -> Path | None:
-    """Walk up from CWD looking for a .tausik directory."""
-    cur = Path.cwd().resolve()
+def _find_tausik_dir(start: Path | None = None) -> Path | None:
+    """Walk up from `start` (default CWD) looking for a .tausik directory."""
+    cur = (start or Path.cwd()).resolve()
     for parent in (cur, *cur.parents):
         candidate = parent / ".tausik"
         if candidate.is_dir():
@@ -136,20 +137,67 @@ def _find_tausik_dir() -> Path | None:
     return None
 
 
-def _ticket_path() -> Path | None:
+def _command_target_dir(command: str) -> Path | None:
+    """Directory the push actually runs in, when the command says so.
+
+    Work often happens in a repository next to the session directory —
+    `cd ../lib && git push`, or `git -C ../lib push`. The hook runs with the
+    session's CWD, so reading HEAD there compares the ticket against the
+    wrong repository (or none at all, when the session directory isn't a
+    repo). Both explicit forms are cheap to read; anything else falls back
+    to CWD, which is what a bare `git push` means anyway.
+    """
+    # posix=False keeps backslashes intact: on Windows a posix split turns
+    # `cd C:\repo` into `cd C:repo` and the directory is never found.
+    try:
+        tokens = [t.strip("\"'") for t in shlex.split(command, posix=False)]
+    except ValueError:
+        return None
+    for i, tok in enumerate(tokens):
+        if tok == "cd" and i + 1 < len(tokens):
+            return Path(tokens[i + 1])
+        if tok != "git" and os.path.basename(tok) not in ("git", "git.exe"):
+            continue
+        j = i + 1
+        while j < len(tokens) and tokens[j].startswith("-"):
+            if tokens[j] == "-C" and j + 1 < len(tokens):
+                return Path(tokens[j + 1])
+            j += 2 if tokens[j] in _GIT_VALUE_OPTS else 1
+    return None
+
+
+def _repo_root(start: Path | None = None) -> Path | None:
+    out = _git(["rev-parse", "--show-toplevel"], cwd=start)
+    if not out:
+        return None
+    try:
+        return Path(out).resolve()
+    except OSError:
+        return None
+
+
+def _ticket_path(target_dir: Path | None = None) -> Path | None:
     override = os.environ.get("TAUSIK_PUSH_TICKET_PATH")
     if override:
         return Path(override)
-    tdir = _find_tausik_dir()
-    if tdir is None:
-        return None
-    return tdir / TICKET_FILENAME
+    # Prefer the .tausik belonging to the repository being pushed — `push-ok`
+    # writes the ticket next to the repo it ran in — then the session's own.
+    candidates = [d for d in (_find_tausik_dir(target_dir), _find_tausik_dir()) if d is not None]
+    for tdir in candidates:
+        if (tdir / TICKET_FILENAME).exists():
+            return tdir / TICKET_FILENAME
+    if candidates:
+        return candidates[0] / TICKET_FILENAME
+    # Nothing exists yet: still name where a ticket would be looked for, so
+    # the refusal tells the caller which directory to run `push-ok` in.
+    home = _repo_root(target_dir) or target_dir or Path.cwd()
+    return home / ".tausik" / TICKET_FILENAME
 
 
-def _git_head_sha() -> str | None:
+def _git(args: list[str], cwd: Path | None = None) -> str | None:
     try:
         out = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"],
+            ["git"] + args,
             stderr=subprocess.DEVNULL,
             # stdin=DEVNULL was MISSING here — the one genuinely-unguarded git call
             # (git-exec-single-wrapper), safe until now only because this hook's
@@ -160,19 +208,36 @@ def _git_head_sha() -> str | None:
             # bootstrap. See v14b-defect-mcp-task-done-stdin-hang.
             stdin=subprocess.DEVNULL,
             timeout=3,
+            cwd=str(cwd) if cwd else None,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, ValueError):
         return None
     return out.decode("utf-8", "replace").strip()
 
 
-def _consume_ticket() -> tuple[bool, str]:
-    """Return (allow, reason). On allow, the ticket file has been deleted."""
-    path = _ticket_path()
+def _git_head_sha(cwd: Path | None = None) -> str | None:
+    return _git(["rev-parse", "HEAD"], cwd=cwd)
+
+
+def _consume_ticket(target_dir: Path | None = None) -> tuple[bool, str]:
+    """Return (allow, reason). On allow, the ticket file has been deleted.
+
+    `target_dir` is the directory the push runs in (see `_command_target_dir`);
+    HEAD and the ticket's repo are both read there, so a session opened
+    outside the repository — or in a directory that is no repository at all —
+    still validates against the repo actually being pushed.
+    """
+    path = _ticket_path(target_dir)
     if path is None:
-        return False, "no .tausik directory found — run `tausik init` first"
+        return False, (
+            "no .tausik directory found near the session or the repository "
+            "being pushed — run `tausik init` first"
+        )
     if not path.exists():
-        return False, "no push ticket — run `tausik push-ok` first to authorize"
+        return False, (
+            f"no push ticket at {path} — run `tausik push-ok` first to "
+            "authorize (run it inside the repository you are pushing)"
+        )
     try:
         raw = path.read_text(encoding="utf-8")
     except OSError as e:
@@ -202,7 +267,23 @@ def _consume_ticket() -> tuple[bool, str]:
         except OSError:
             pass
         return False, "push ticket expired — re-run `tausik push-ok`"
-    head = _git_head_sha()
+    # A ticket names the repository it was issued for (tickets written before
+    # this field existed simply don't constrain it). Without the check, a
+    # ticket taken for one repo would authorize a push from another.
+    target_root = _repo_root(target_dir)
+    ticket_root = ticket.get("repo_root") or ""
+    if ticket_root and target_root is not None:
+        try:
+            same = Path(ticket_root).resolve() == target_root
+        except OSError:
+            same = False
+        if not same:
+            return False, (
+                f"push ticket was issued for {ticket_root}, but this push runs "
+                f"in {target_root} — run `tausik push-ok` in the repository "
+                "you are pushing"
+            )
+    head = _git_head_sha(target_dir)
     ticket_sha = ticket.get("commit_sha", "")
     if head and ticket_sha and ticket_sha != head:
         return False, (
@@ -241,7 +322,7 @@ def main() -> int:
     if not _command_invokes_git_push(command, str(data.get("tool_name") or "")):
         return 0
 
-    allow, reason = _consume_ticket()
+    allow, reason = _consume_ticket(_command_target_dir(command))
     if allow:
         return 0
 

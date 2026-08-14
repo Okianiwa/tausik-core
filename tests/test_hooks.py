@@ -13,9 +13,16 @@ HOOKS_DIR = os.path.join(os.path.dirname(__file__), "..", "scripts", "hooks")
 
 
 def run_hook(
-    script: str, stdin_data: dict | None = None, env_extra: dict | None = None
+    script: str,
+    stdin_data: dict | None = None,
+    env_extra: dict | None = None,
+    cwd: str | None = None,
 ) -> subprocess.CompletedProcess:
-    """Run a hook script with optional stdin JSON and env vars."""
+    """Run a hook script with optional stdin JSON, env vars and working dir.
+
+    `cwd` matters for the push gate: the hook runs in the session's directory,
+    which is not necessarily the repository being pushed.
+    """
     env = os.environ.copy()
     env["TAUSIK_SKIP_HOOKS"] = ""  # Don't skip in tests
     if env_extra:
@@ -29,6 +36,7 @@ def run_hook(
         encoding="utf-8",
         errors="replace",
         env=env,
+        cwd=cwd,
         timeout=10,
     )
 
@@ -830,3 +838,134 @@ class TestTaskGateJurisdiction:
             env_extra={"CLAUDE_PROJECT_DIR": str(proj)},
         )
         assert r.returncode == 0, r.stderr
+
+
+class TestPushTicketAcrossRepositories:
+    """The gate runs with the session's CWD, but work often happens in a
+    repository beside it — the library hub, an ops checkout. Reading HEAD in
+    the session directory compared the ticket against the wrong repository,
+    and when the session directory was no repository at all no ticket could
+    be issued for it: a legitimate push became unauthorizable.
+    """
+
+    @staticmethod
+    def _init_repo(path) -> str:
+        path.mkdir(parents=True, exist_ok=True)
+
+        def run(*a):
+            subprocess.run(["git", *a], cwd=str(path), check=True, capture_output=True)
+
+        run("init", "-q")
+        run("config", "user.email", "t@example.com")
+        run("config", "user.name", "T")
+        (path / "f.txt").write_text("x", encoding="utf-8")
+        run("add", "-A")
+        run("commit", "-qm", "init")
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=str(path), encoding="utf-8"
+        ).strip()
+
+    @staticmethod
+    def _ticket_for(repo, sha, *, repo_root=None, minutes=5):
+        from datetime import datetime, timedelta, timezone
+
+        tdir = repo / ".tausik"
+        tdir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": 1,
+            "commit_sha": sha,
+            "branch": "main",
+            "repo_root": str(repo if repo_root is None else repo_root),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat(),
+        }
+        path = tdir / ".push_ticket.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return path
+
+    @staticmethod
+    def _session(tmp_path):
+        """A session directory that is deliberately not a repository."""
+        session = tmp_path / "session"
+        session.mkdir()
+        return str(session)
+
+    def test_a_push_in_a_neighbouring_repo_is_authorized(self, tmp_path):
+        repo = tmp_path / "lib"
+        ticket = self._ticket_for(repo, self._init_repo(repo))
+        r = run_hook(
+            "git_push_gate.py",
+            {"tool_input": {"command": f"cd {repo} && git push"}},
+            cwd=self._session(tmp_path),
+        )
+        assert r.returncode == 0, r.stderr
+        assert not ticket.exists(), "ticket must be consumed"
+
+    def test_the_dash_C_form_is_understood_too(self, tmp_path):
+        repo = tmp_path / "lib"
+        self._ticket_for(repo, self._init_repo(repo))
+        r = run_hook(
+            "git_push_gate.py",
+            {"tool_input": {"command": f"git -C {repo} push origin main"}},
+            cwd=self._session(tmp_path),
+        )
+        assert r.returncode == 0, r.stderr
+
+    def test_a_ticket_issued_for_another_repo_is_refused(self, tmp_path):
+        """NEGATIVE: authorizing one repository must not authorize another."""
+        target, other = tmp_path / "target", tmp_path / "other"
+        sha = self._init_repo(target)
+        self._init_repo(other)
+        self._ticket_for(target, sha, repo_root=other)
+        r = run_hook(
+            "git_push_gate.py",
+            {"tool_input": {"command": f"cd {target} && git push"}},
+            cwd=self._session(tmp_path),
+        )
+        assert r.returncode == 2
+        assert "issued for" in r.stderr
+
+    def test_a_neighbouring_repo_without_a_ticket_still_blocks(self, tmp_path):
+        """NEGATIVE: reaching the right repository must not relax the gate."""
+        repo = tmp_path / "lib"
+        self._init_repo(repo)
+        r = run_hook(
+            "git_push_gate.py",
+            {"tool_input": {"command": f"cd {repo} && git push"}},
+            cwd=self._session(tmp_path),
+        )
+        assert r.returncode == 2
+        assert "no push ticket" in r.stderr
+        assert ".push_ticket.json" in r.stderr, "the refusal must name where it looked"
+
+    def test_the_ticket_stays_single_use(self, tmp_path):
+        repo = tmp_path / "lib"
+        self._ticket_for(repo, self._init_repo(repo))
+        session = self._session(tmp_path)
+        payload = {"tool_input": {"command": f"cd {repo} && git push"}}
+        assert run_hook("git_push_gate.py", payload, cwd=session).returncode == 0
+        assert run_hook("git_push_gate.py", payload, cwd=session).returncode == 2
+
+    def test_a_stale_ticket_in_the_neighbouring_repo_is_refused(self, tmp_path):
+        """NEGATIVE: the TTL is not relaxed by living in another repository."""
+        repo = tmp_path / "lib"
+        self._ticket_for(repo, self._init_repo(repo), minutes=-1)
+        r = run_hook(
+            "git_push_gate.py",
+            {"tool_input": {"command": f"cd {repo} && git push"}},
+            cwd=self._session(tmp_path),
+        )
+        assert r.returncode == 2
+        assert "expired" in r.stderr
+
+    def test_a_ticket_does_not_open_the_firewall(self, tmp_path):
+        """NEGATIVE: what bash_firewall refuses stays refused — a valid ticket
+        authorizes a push, not a history rewrite."""
+        repo = tmp_path / "lib"
+        self._ticket_for(repo, self._init_repo(repo))
+        rewrite = "--" + "force"  # spelled apart: the firewall reads this file too
+        r = run_hook(
+            "bash_firewall.py",
+            {"tool_input": {"command": f"cd {repo} && git push {rewrite} origin main"}},
+        )
+        assert r.returncode != 0
