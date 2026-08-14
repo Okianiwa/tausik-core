@@ -20,9 +20,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "hoo
 
 import autoloop_chat_cycle as cycle
 import autoloop_keys as keys
+import autoloop_run_state as run_state
 import autoloop_watch as watch
 
 QUEUE = "очередь задач TAUSIK"
+AGENTS_STOP_FILE = os.path.join(".tausik", ".autoloop.stop")
 
 
 def chat_pid() -> int | None:
@@ -40,6 +42,15 @@ def chat_pid() -> int | None:
 
 
 def start(project_dir: str, direction: str) -> str:
+    # The two modes share one queue; two runners would take the same tasks from
+    # each other. The refusal is symmetric — autoloop_run refuses to start over
+    # a declared chat run the same way.
+    if run_state.mode(project_dir) == run_state.MODE_AGENTS:
+        return (
+            "идёт прогон агентами (метка .tausik/.autoloop.run) — "
+            "две очереди на один проект дерутся за одни задачи. "
+            "Останови его: /auto стоп"
+        )
     direction = (direction or "").strip() or QUEUE
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     if not cycle.start_run(project_dir, direction, now):
@@ -71,8 +82,23 @@ def _lock_owner(project_dir: str):
 
 
 def stop(project_dir: str) -> str:
-    """Remove the declaration. The watcher reads it every couple of seconds and
-    leaves on its own — no signal, no PID, nothing to get wrong."""
+    """Stop whichever mode is going.
+
+    In the chat that means removing the declaration: the watcher reads it every
+    couple of seconds and leaves on its own — no signal, no PID, nothing to get
+    wrong. In agents mode the supervisor owns processes, so it is asked to
+    finish the iteration it is in rather than killed mid-task.
+    """
+    if run_state.mode(project_dir) == run_state.MODE_AGENTS:
+        try:
+            with open(os.path.join(project_dir, AGENTS_STOP_FILE), "w", encoding="utf-8") as f:
+                f.write("")
+        except OSError as e:
+            return f"не удалось попросить прогон агентов остановиться: {e}"
+        return (
+            "прогон агентами остановится после текущей итерации — "
+            "работа, которая идёт, не обрывается"
+        )
     if not cycle.run_declared(project_dir):
         return "прогона нет — останавливать нечего"
     cycle.end_run(project_dir)
@@ -80,6 +106,11 @@ def stop(project_dir: str) -> str:
 
 
 def status(project_dir: str) -> str:
+    if run_state.mode(project_dir) == run_state.MODE_AGENTS:
+        return (
+            "идёт прогон агентами: очередь разгребают отдельные процессы, "
+            "чат свободен. Итоги — /auto отчёт, остановить — /auto стоп"
+        )
     run = cycle.read_run(project_dir)
     if not run:
         return "прогона нет: контекст никто не смотрит, чат обычный"

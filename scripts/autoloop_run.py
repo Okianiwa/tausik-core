@@ -181,6 +181,20 @@ def loop(args: argparse.Namespace) -> int:
         )
         return EXIT_STOPPED
 
+    # Symmetric to the check above: the two modes share one queue, and two
+    # runners would take the same tasks from each other. The chat mode has no
+    # marker of its own to trip over here, so it is asked about by name.
+    import autoloop_chat_cycle as chat_cycle
+
+    if chat_cycle.run_declared(str(project_dir)):
+        run = chat_cycle.read_run(str(project_dir)) or {}
+        log(
+            "[autoloop] в этом проекте уже идёт прогон в чате"
+            + (f" ({run.get('direction')})" if run.get("direction") else "")
+            + ". Останови его — `/auto стоп` — либо работай в нём."
+        )
+        return EXIT_STOPPED
+
     if not pick_next_task(project_dir):
         log("[autoloop] очередь пуста — делать нечего")
         return EXIT_OK

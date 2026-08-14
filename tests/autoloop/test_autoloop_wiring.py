@@ -213,3 +213,47 @@ def test_stopping_what_was_never_started_is_not_an_error(project_dir):
 
 def test_status_outside_a_run_says_the_chat_is_ordinary(project_dir):
     assert "прогона нет" in command.status(str(project_dir))
+
+
+# --- two modes, one queue: neither starts over the other -------------------
+
+import autoloop_command as command  # noqa: E402 — scripts/ is on the path via conftest
+
+
+def declare_agents_run(project_dir):
+    (project_dir / ".tausik" / ".autoloop.run").write_text("4242", encoding="utf-8")
+
+
+class TestTheModesRefuseEachOther:
+    """Both modes take work from the same queue. Two runners would hand each
+    other half-finished tasks, so whichever is declared first holds the floor."""
+
+    def test_the_chat_refuses_to_start_over_agents(self, project_dir):
+        declare_agents_run(project_dir)
+
+        answer = command.start(str(project_dir), "разгреби очередь")
+
+        assert "агент" in answer
+        assert not cycle.run_declared(str(project_dir)), "chat run declared anyway"
+
+    def test_stop_asks_agents_to_finish_the_iteration(self, project_dir):
+        """Killing mid-task would leave the work half-done; the supervisor is
+        asked to stop after the iteration it is in."""
+        declare_agents_run(project_dir)
+
+        answer = command.stop(str(project_dir))
+
+        assert (project_dir / ".tausik" / ".autoloop.stop").exists()
+        assert "после текущей итерации" in answer
+
+    def test_status_names_the_mode_that_is_going(self, project_dir):
+        declare_agents_run(project_dir)
+        assert "агент" in command.status(str(project_dir))
+
+        (project_dir / ".tausik" / ".autoloop.run").unlink()
+        cycle.start_run(str(project_dir), "разгреби очередь")
+        assert "разгреби очередь" in command.status(str(project_dir))
+
+    def test_nothing_running_is_said_plainly(self, project_dir):
+        assert "прогона нет" in command.status(str(project_dir))
+        assert "останавливать нечего" in command.stop(str(project_dir))

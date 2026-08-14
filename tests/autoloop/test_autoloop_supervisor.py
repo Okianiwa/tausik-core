@@ -269,6 +269,21 @@ def test_missing_tausik_cli_stops_before_anything_else(monkeypatch, project_dir)
     assert run_loop() == autoloop.EXIT_STOPPED
 
 
+def test_agents_refuse_to_start_over_a_run_in_the_chat(loop_env, capsys):
+    """The two modes share one queue. Agents mode already refuses a second
+    supervisor; a run declared in the chat holds the floor the same way."""
+    import autoloop_chat_cycle as chat_cycle
+
+    loop_env["queue"]["planning"] = ["task-a"]
+    chat_cycle.start_run(str(autoloop.PROJECT_DIR), "разгреби очередь")
+
+    code = run_loop()
+
+    assert code == autoloop.EXIT_STOPPED
+    assert loop_env["claude"] == [], "spawned an agent over a chat run"
+    assert "в чате" in capsys.readouterr().out
+
+
 # --- brake wiring ---------------------------------------------------------
 
 
