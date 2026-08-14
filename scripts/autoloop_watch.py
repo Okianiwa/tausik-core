@@ -36,6 +36,7 @@ from autoloop_chat_cycle import (
     confirm,
     draft_changed,
     needs_maintenance,
+    run_declared,
     sequence,
     wait_ready,
 )
@@ -255,6 +256,11 @@ def watch(
         while alive(pid):
             if os.path.exists(os.path.join(project_dir, STOP_FILE)):
                 log(project_dir, "остановлен файлом-стопом")
+                return 0
+            if not run_declared(project_dir):
+                # The human said stop. Nothing to signal and no PID to get
+                # wrong: the declaration is gone, so the watcher is too.
+                log(project_dir, "прогон снят — наблюдатель уходит")
                 return 0
             percent = reading(project_dir)
             path = transcript_path(project_dir, transcript)

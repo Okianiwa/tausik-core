@@ -11,6 +11,7 @@ import json
 import os
 import sys
 
+import autoloop_chat_cycle as cycle
 import chat_watch as hook
 from conftest import AUTONOMY_PROFILE
 
@@ -98,21 +99,41 @@ def write_config(project_dir, config):
         json.dump(config, f)
 
 
-def test_a_project_that_asked_for_it_is_watched(project_dir):
-    write_config(project_dir, {"autoloop": {"watch": True}})
+def test_a_chat_with_a_declared_run_is_watched(project_dir):
+    cycle.start_run(str(project_dir), "очередь задач")
 
     assert hook.watch_enabled(str(project_dir)) is True
 
 
-def test_a_project_that_did_not_ask_is_left_alone(project_dir):
-    """AC negative: the hook arrives everywhere; the cleaning does not. A chat
-    wiping itself because a library update landed is a lost conversation."""
-    write_config(project_dir, {"autoloop": {"soft_threshold": 30}})
+def test_a_config_flag_alone_no_longer_switches_it_on(project_dir):
+    """AC negative: the flag was permanent — set once and every session since
+    came with a watcher nobody asked for that day, including the sessions
+    opened to do one's own work. Consent is now the run, not the setting."""
+    write_config(project_dir, {"autoloop": {"watch": True}})
 
     assert hook.watch_enabled(str(project_dir)) is False
 
 
-def test_no_config_at_all_means_no_watching(project_dir):
+def test_between_runs_the_mechanism_does_not_exist(project_dir):
+    """AC negative: the library reaches nine projects; none of them start
+    watching anything, because none of them have a run declared."""
+    assert hook.watch_enabled(str(project_dir)) is False
+
+
+def test_a_half_written_declaration_is_not_consent(project_dir):
+    """A truncated file is not permission to type into somebody's chat."""
+    with open(cycle.run_path(str(project_dir)), "w", encoding="utf-8") as f:
+        f.write('{"direction": "оче')
+
+    assert hook.watch_enabled(str(project_dir)) is False
+
+
+def test_a_declaration_without_a_direction_is_not_a_run(project_dir):
+    """Nothing to continue with means nothing to start."""
+    with open(cycle.run_path(str(project_dir)), "w", encoding="utf-8") as f:
+        f.write('{"direction": "   "}')
+
+    assert cycle.start_run(str(project_dir), "  ") is False
     assert hook.watch_enabled(str(project_dir)) is False
 
 
@@ -142,3 +163,53 @@ def test_the_hook_does_not_spawn_a_watcher_when_switched_off(project_dir, monkey
     assert hook.main() == 0
     assert spawned == []
     assert not (project_dir / ".tausik" / ".chat.started").exists()
+
+
+# --- the switch itself -----------------------------------------------------
+
+
+import autoloop_command as command  # noqa: E402 — kept beside the tests that use it
+
+
+def declared(project_dir, monkeypatch, direction="разгреби очередь"):
+    monkeypatch.setattr(command, "chat_pid", lambda: 111)
+    monkeypatch.setattr(command.watch, "spawn", lambda *_a, **_k: None)
+    return command.start(str(project_dir), direction)
+
+
+def test_the_command_declares_a_run_and_remembers_the_direction(project_dir, monkeypatch):
+    out = declared(project_dir, monkeypatch)
+
+    assert cycle.run_direction(str(project_dir)) == "разгреби очередь"
+    assert "прогон объявлен" in out
+
+
+def test_the_direction_outlives_the_wipe(project_dir, monkeypatch):
+    """After `/clear` nothing else remembers what the work was about — the
+    conversation that knew is exactly what got erased."""
+    declared(project_dir, monkeypatch, "почини вёрстку на главной")
+
+    assert cycle.run_direction(str(project_dir)) == "почини вёрстку на главной"
+
+
+def test_no_direction_means_the_queue(project_dir, monkeypatch):
+    declared(project_dir, monkeypatch, "   ")
+
+    assert cycle.run_direction(str(project_dir)) == command.QUEUE
+
+
+def test_stop_takes_the_declaration_away(project_dir, monkeypatch):
+    declared(project_dir, monkeypatch)
+
+    out = command.stop(str(project_dir))
+
+    assert cycle.run_declared(str(project_dir)) is False
+    assert "снят" in out
+
+
+def test_stopping_what_was_never_started_is_not_an_error(project_dir):
+    assert "нечего" in command.stop(str(project_dir))
+
+
+def test_status_outside_a_run_says_the_chat_is_ordinary(project_dir):
+    assert "прогона нет" in command.status(str(project_dir))

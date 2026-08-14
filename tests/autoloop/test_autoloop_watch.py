@@ -2,6 +2,7 @@
 
 import json
 
+import autoloop_chat_cycle as cycle_state
 import autoloop_presence as presence
 import autoloop_watch as watch
 import chat_watch as hook  # hooks/ is on the path via conftest
@@ -418,6 +419,7 @@ def spin_watch(monkeypatch, project_dir, screens, ticks=3, quiet=600.0):
     clock = iter([0.0, 10.0, 20.0, 30.0])
     beats = iter([True] * ticks + [False])
     ran = []
+    cycle_state.start_run(str(project_dir), "очередь задач")
     monkeypatch.setattr(watch.keys, "pid_exists", lambda _pid: True)
     monkeypatch.setattr(watch, "alive", lambda _pid: next(beats))
     monkeypatch.setattr(watch, "reading", lambda _p: 99)
@@ -488,3 +490,18 @@ def test_a_watcher_that_dies_leaves_a_trace(project_dir, monkeypatch):
 
     assert seen["stderr"] != watch.subprocess.DEVNULL
     assert (project_dir / ".tausik" / "chat-watch.err.log").exists()
+
+
+def test_a_watcher_leaves_when_the_run_is_taken_away(project_dir, monkeypatch):
+    """AC: stop is a file being removed, not a signal — nothing to send and no
+    PID to get wrong. The watcher notices within a couple of seconds."""
+    monkeypatch.setattr(watch.keys, "pid_exists", lambda _pid: True)
+    monkeypatch.setattr(watch, "alive", lambda _pid: True)
+    ran = []
+    monkeypatch.setattr(watch, "run_sequence", lambda *_a: ran.append("sequence") or True)
+
+    watch.watch(str(project_dir), pid=111, threshold=30)
+
+    journal = (project_dir / ".tausik" / "chat-watch.log").read_text(encoding="utf-8")
+    assert ran == []
+    assert "прогон снят" in journal

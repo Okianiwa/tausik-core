@@ -3,6 +3,7 @@
 import io
 import json
 
+import autoloop_chat_cycle
 import pytest
 from conftest import assistant_entry
 
@@ -21,8 +22,14 @@ from autoloop.state import (
 SESSION = "test-session"
 
 
-def run_hook(monkeypatch, project_dir, payload):
-    """Invoke the hook the way Claude Code does: JSON on stdin, env for the dir."""
+def run_hook(monkeypatch, project_dir, payload, run="очередь задач"):
+    """Invoke the hook the way Claude Code does: JSON on stdin, env for the dir.
+
+    A run is declared first, because measuring is watching: outside one the
+    sensor writes nothing at all, and these tests are about what it writes.
+    """
+    if run:
+        autoloop_chat_cycle.start_run(str(project_dir), run)
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_dir))
     monkeypatch.delenv("TAUSIK_SKIP_HOOKS", raising=False)
     payload.setdefault("session_id", SESSION)
@@ -81,20 +88,11 @@ def test_missing_database_is_idle(tmp_path):
 # --- hook behaviour -------------------------------------------------------
 
 
-def test_writes_state_file_with_measured_fill(
-    monkeypatch, project_dir, add_task, transcript
-):
+def test_writes_state_file_with_measured_fill(monkeypatch, project_dir, add_task, transcript):
     add_task("t1", steps=[("a", True)])
-    path = transcript(
-        [assistant_entry(input_tokens=2, cache_creation=698, cache_read=299_300)]
-    )
+    path = transcript([assistant_entry(input_tokens=2, cache_creation=698, cache_read=299_300)])
 
-    assert (
-        run_hook(
-            monkeypatch, project_dir, {"transcript_path": path, "session_id": "s1"}
-        )
-        == 0
-    )
+    assert run_hook(monkeypatch, project_dir, {"transcript_path": path, "session_id": "s1"}) == 0
 
     # Read back under the id the payload actually carried: state is per-session,
     # so "s1" and the default SESSION are deliberately different files.
@@ -147,9 +145,7 @@ def test_non_tausik_directory_is_skipped(monkeypatch, tmp_path):
     assert not (tmp_path / ".tausik" / ".autoloop.json").exists()
 
 
-def test_exit_request_survives_a_sensor_rewrite(
-    monkeypatch, project_dir, add_task, transcript
-):
+def test_exit_request_survives_a_sensor_rewrite(monkeypatch, project_dir, add_task, transcript):
     """The sensor runs after exit_guard; clobbering its flag would re-arm a fired block."""
     add_task("t1", steps=[("a", True)])
     write_state(project_dir, SESSION, {"exit_requested": True, "exit_kind": "soft"})
@@ -219,3 +215,34 @@ def test_config_rejects_nonsense_values(project_dir):
 
     assert config["context_window"] == 1_000_000
     assert config["soft_threshold"] == 30.0
+
+
+# --- outside a run there is nothing to measure -----------------------------
+
+
+def test_without_a_declared_run_nothing_is_measured(project_dir, monkeypatch, tmp_path):
+    """AC negative: a person opened a chat to do their own work. Measuring is
+    watching, and nobody asked to be watched — no reading file appears at all."""
+    path = str(tmp_path / "session.jsonl")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(assistant_entry(cache_read=120_000)) + "\n")
+
+    run_hook(monkeypatch, project_dir, {"transcript_path": path}, run=None)
+
+    assert not (project_dir / ".tausik" / "autoloop").exists()
+
+
+def test_a_stopped_run_stops_the_measuring(project_dir, monkeypatch, tmp_path):
+    """The command that ends a run ends the watching with it — including the
+    part that leaves files behind after everyone has gone home."""
+    path = str(tmp_path / "session.jsonl")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(assistant_entry(cache_read=120_000)) + "\n")
+    run_hook(monkeypatch, project_dir, {"transcript_path": path})
+    written = sorted(p.name for p in (project_dir / ".tausik" / "autoloop").iterdir())
+
+    autoloop_chat_cycle.end_run(str(project_dir))
+    run_hook(monkeypatch, project_dir, {"transcript_path": path}, run=None)
+
+    assert written  # the first run did measure
+    assert sorted(p.name for p in (project_dir / ".tausik" / "autoloop").iterdir()) == written

@@ -34,13 +34,14 @@ SESSION_B = "bbbbbbbb-5555-6666-7777-888888888888"
 
 
 def run_sensor(monkeypatch, project_dir, transcript_path, session_id):
+    import autoloop_chat_cycle
+
+    autoloop_chat_cycle.start_run(str(project_dir), "очередь задач")
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_dir))
     monkeypatch.delenv("TAUSIK_SKIP_HOOKS", raising=False)
     monkeypatch.setattr(
         "sys.stdin",
-        io.StringIO(
-            json.dumps({"transcript_path": transcript_path, "session_id": session_id})
-        ),
+        io.StringIO(json.dumps({"transcript_path": transcript_path, "session_id": session_id})),
     )
     return sensor.main()
 
@@ -64,9 +65,7 @@ def test_missing_session_id_is_named_not_merged(project_dir):
     "raw,expected_absent",
     [("../../etc/passwd", ".."), ("a/b", "/"), ("c\\d", "\\"), ("x:y", ":")],
 )
-def test_session_id_cannot_escape_the_state_directory(
-    project_dir, raw, expected_absent
-):
+def test_session_id_cannot_escape_the_state_directory(project_dir, raw, expected_absent):
     """The id becomes a filename, so path characters must not survive it."""
     path = state_path(project_dir, raw)
 
@@ -92,9 +91,7 @@ def test_absent_session_reads_empty_not_a_neighbour(project_dir):
     assert read_state(project_dir, SESSION_B) == {}
 
 
-def test_two_sensor_runs_keep_separate_readings(
-    monkeypatch, project_dir, add_task, transcript
-):
+def test_two_sensor_runs_keep_separate_readings(monkeypatch, project_dir, add_task, transcript):
     add_task("t1", steps=[("a", True)])
     small = transcript([assistant_entry(cache_read=100_000)])
     large = transcript([assistant_entry(cache_read=800_000)])

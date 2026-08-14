@@ -14,12 +14,75 @@ and all three rules exist because breaking them loses work:
 
 from __future__ import annotations
 
+import json
 import os
 import time
 
 READY_FLAG = os.path.join(".tausik", ".chat.ready")
 STARTED_FLAG = os.path.join(".tausik", ".chat.started")
 LOCK_FILE = os.path.join(".tausik", ".chat.lock")
+RUN_FILE = os.path.join(".tausik", ".chat-loop.json")
+
+
+def run_path(project_dir: str) -> str:
+    return os.path.join(project_dir, RUN_FILE)
+
+
+def start_run(project_dir: str, direction: str, now: str = "") -> bool:
+    """Declare a run: this chat may be watched, and this is what it works on.
+
+    A file rather than a config flag, because a flag is permanent and this is
+    not: a person who opens a chat to do their own work has not asked for a
+    watcher, and `autoloop.watch: true` gave them one anyway, in every session,
+    forever. The file exists only between the command that starts a run and the
+    one that stops it.
+
+    It also carries the direction across `/clear` — after a wipe nothing else
+    remembers what the work was about.
+    """
+    direction = (direction or "").strip()
+    if not direction:
+        return False
+    try:
+        with open(run_path(project_dir), "w", encoding="utf-8") as f:
+            json.dump({"direction": direction, "started_at": now}, f, ensure_ascii=False)
+    except OSError:
+        return False
+    return True
+
+
+def read_run(project_dir: str):
+    """The declared run, or None. Anything unreadable is "no run".
+
+    Never a crash and never a default: a half-written file is not permission to
+    start typing into somebody's chat.
+    """
+    try:
+        with open(run_path(project_dir), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    direction = str(data.get("direction") or "").strip()
+    return {**data, "direction": direction} if direction else None
+
+
+def run_direction(project_dir: str) -> str:
+    run = read_run(project_dir)
+    return run["direction"] if run else ""
+
+
+def run_declared(project_dir: str) -> bool:
+    return read_run(project_dir) is not None
+
+
+def end_run(project_dir: str) -> None:
+    try:
+        os.unlink(run_path(project_dir))
+    except OSError:
+        pass
+
 
 # Order matters: state to disk, then wipe, then reload it.
 #

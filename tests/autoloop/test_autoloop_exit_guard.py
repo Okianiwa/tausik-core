@@ -22,9 +22,7 @@ CONFIG = {"soft_threshold": 30.0, "hard_threshold": 75.0}
 SESSION = "test-session"
 
 
-def capture(
-    monkeypatch, project_dir, payload, autonomy=True, capsys=None, want_err=False
-):
+def capture(monkeypatch, project_dir, payload, autonomy=True, capsys=None, want_err=False):
     """Run the hook and return (exit_code, decision_dict_or_None).
 
     readouterr() drains both streams, so stderr has to be handed back from the
@@ -85,9 +83,7 @@ def test_thresholds_come_from_config(project_dir):
     config = load_config(project_dir)
 
     assert decide({"percent": 12.0, "task_state": STATE_COMPLETE}, config) == EXIT_SOFT
-    assert (
-        decide({"percent": 25.0, "task_state": STATE_IN_PROGRESS}, config) == EXIT_HARD
-    )
+    assert decide({"percent": 25.0, "task_state": STATE_IN_PROGRESS}, config) == EXIT_HARD
 
 
 # --- hook behaviour -------------------------------------------------------
@@ -99,9 +95,7 @@ def test_blocks_at_soft_threshold_on_a_finished_task(
     add_task("t1", steps=[("a", True)])
     path = transcript([assistant_entry(cache_read=310_000)])
 
-    code, decision = capture(
-        monkeypatch, project_dir, {"transcript_path": path}, capsys=capsys
-    )
+    code, decision = capture(monkeypatch, project_dir, {"transcript_path": path}, capsys=capsys)
 
     assert code == 0
     assert decision["decision"] == "block"
@@ -115,51 +109,37 @@ def test_hard_threshold_demands_a_handoff_mid_task(
     add_task("t1", steps=[("a", False)])
     path = transcript([assistant_entry(cache_read=800_000)])
 
-    _, decision = capture(
-        monkeypatch, project_dir, {"transcript_path": path}, capsys=capsys
-    )
+    _, decision = capture(monkeypatch, project_dir, {"transcript_path": path}, capsys=capsys)
 
     assert decision["decision"] == "block"
     assert "handoff" in decision["reason"].lower()
     assert read_state(project_dir, SESSION)["exit_kind"] == EXIT_HARD
 
 
-def test_no_block_below_threshold(
-    monkeypatch, capsys, project_dir, add_task, transcript
-):
+def test_no_block_below_threshold(monkeypatch, capsys, project_dir, add_task, transcript):
     add_task("t1", steps=[("a", True)])
     path = transcript([assistant_entry(cache_read=100_000)])
 
-    code, decision = capture(
-        monkeypatch, project_dir, {"transcript_path": path}, capsys=capsys
-    )
+    code, decision = capture(monkeypatch, project_dir, {"transcript_path": path}, capsys=capsys)
 
     assert code == 0
     assert decision is None
     assert read_state(project_dir, SESSION).get("exit_requested") is None
 
 
-def test_second_stop_does_not_block_again(
-    monkeypatch, capsys, project_dir, add_task, transcript
-):
+def test_second_stop_does_not_block_again(monkeypatch, capsys, project_dir, add_task, transcript):
     """AC negative: block→block would trap the process in a loop it cannot leave."""
     add_task("t1", steps=[("a", True)])
     path = transcript([assistant_entry(cache_read=400_000)])
 
-    _, first = capture(
-        monkeypatch, project_dir, {"transcript_path": path}, capsys=capsys
-    )
-    _, second = capture(
-        monkeypatch, project_dir, {"transcript_path": path}, capsys=capsys
-    )
+    _, first = capture(monkeypatch, project_dir, {"transcript_path": path}, capsys=capsys)
+    _, second = capture(monkeypatch, project_dir, {"transcript_path": path}, capsys=capsys)
 
     assert first["decision"] == "block"
     assert second is None
 
 
-def test_stop_hook_active_flag_is_honoured(
-    monkeypatch, capsys, project_dir, add_task, transcript
-):
+def test_stop_hook_active_flag_is_honoured(monkeypatch, capsys, project_dir, add_task, transcript):
     """The harness's own re-entry marker is the first line of loop defence."""
     add_task("t1", steps=[("a", True)])
     path = transcript([assistant_entry(cache_read=900_000)])
@@ -186,9 +166,7 @@ def test_a_closed_session_no_longer_silences_the_guard(
     close_session()
     path = transcript([assistant_entry(cache_read=500_000)])
 
-    _, decision = capture(
-        monkeypatch, project_dir, {"transcript_path": path}, capsys=capsys
-    )
+    _, decision = capture(monkeypatch, project_dir, {"transcript_path": path}, capsys=capsys)
 
     assert decision["decision"] == "block"
     assert "Сессию НЕ закрывай" in decision["reason"]
@@ -216,9 +194,7 @@ def test_interactive_session_gets_a_note_not_a_block(
     assert read_state(project_dir, SESSION).get("exit_requested") is None
 
 
-def test_skip_hooks_disables_the_guard(
-    monkeypatch, capsys, project_dir, add_task, transcript
-):
+def test_skip_hooks_disables_the_guard(monkeypatch, capsys, project_dir, add_task, transcript):
     add_task("t1", steps=[("a", True)])
     path = transcript([assistant_entry(cache_read=900_000)])
     monkeypatch.setenv("TAUSIK_SKIP_HOOKS", "1")
@@ -268,8 +244,11 @@ def test_idle_state_is_recorded_when_no_task_is_active(
     path = transcript([assistant_entry(cache_read=120_000)])
     write_state(project_dir, SESSION, {})
 
+    import autoloop_chat_cycle
     from autoloop import sensor
 
+    # Measuring is watching: outside a declared run the sensor writes nothing.
+    autoloop_chat_cycle.start_run(str(project_dir), "очередь задач")
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_dir))
     monkeypatch.delenv("TAUSIK_SKIP_HOOKS", raising=False)
     monkeypatch.setattr(

@@ -87,26 +87,24 @@ def mark_started(project_dir: str, transcript=None) -> None:
 
 
 def watch_enabled(project_dir: str) -> bool:
-    """Has this project asked for its context to be cleaned?
+    """Is a run declared right now?
 
-    Off unless `.tausik/config.json` says `autoloop.watch: true`. The hook ships
-    to every project the library touches, and a chat that starts wiping its own
-    conversation because a library update arrived is not a feature anyone
-    consented to. Opting in is one line; opting out after the fact is a lost
-    conversation.
+    Not a config flag. A flag is permanent: set once, and every session from
+    then on comes with a watcher the person never asked for that day —
+    including the sessions they opened to do their own work. The declaration is
+    a file written by an explicit command and removed by the command that stops
+    the run, so between runs this mechanism does not exist at all.
+
+    This is also what makes distribution safe: the library reaches nine
+    projects, and none of them start watching anything, because none of them
+    have a run declared.
     """
     try:
-        import json
+        import autoloop_chat_cycle
 
-        from tausik_utils import tausik_config_path
-
-        with open(tausik_config_path(project_dir), encoding="utf-8") as f:
-            config = json.load(f)
-    except (OSError, ValueError, ImportError):
+        return autoloop_chat_cycle.run_declared(project_dir)
+    except ImportError:
         return False
-    if not isinstance(config, dict):
-        return False
-    return config.get("autoloop", {}).get("watch") is True
 
 
 def main() -> int:

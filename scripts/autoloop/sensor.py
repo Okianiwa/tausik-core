@@ -23,6 +23,16 @@ from autoloop.context import percent_full, read_context_usage  # noqa: E402
 from autoloop.state import load_config, read_task_state, write_state  # noqa: E402
 
 
+def _run_declared(project_dir: str) -> bool:
+    """Kept import-local: a Stop hook that fails on an import stops the turn."""
+    try:
+        import autoloop_chat_cycle
+
+        return autoloop_chat_cycle.run_declared(project_dir)
+    except ImportError:
+        return False
+
+
 def build_payload(project_dir: str, transcript_path: str, session_id: str = "") -> dict:
     config = load_config(project_dir)
     usage = read_context_usage(transcript_path)
@@ -54,6 +64,11 @@ def main() -> int:
 
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     if not os.path.isdir(os.path.join(project_dir, ".tausik")):
+        return 0
+    # Measuring is watching. Outside a declared run nobody asked to be watched,
+    # and the only consumer of these readings is the watcher that is not
+    # running either.
+    if not _run_declared(project_dir):
         return 0
 
     session_id = str(payload.get("session_id") or "")
