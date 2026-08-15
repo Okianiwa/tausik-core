@@ -16,6 +16,7 @@ import pytest
 
 import autoloop_presence as presence
 import autoloop_run as autoloop
+import autoloop_window as window
 from .conftest import FakeProcess
 
 
@@ -44,7 +45,7 @@ def loop_env(monkeypatch, project_dir):
     # These tests are about what a real run does, so they have to stand where a
     # real run stands — the runner detector is what they are stepping over, and
     # it gets its own two tests below.
-    monkeypatch.setattr(autoloop, "under_test", lambda: False)
+    monkeypatch.setattr(window, "under_test", lambda: False)
     claude = []
 
     def fake_cli(project, args, timeout=30):
@@ -139,37 +140,99 @@ def test_no_lock_at_all_means_no_window(project_dir):
     assert presence.overlay_is_open(str(project_dir)) is False
 
 
-# --- and the chat mode stays as it was ------------------------------------
+# --- the chat mode opens one too ------------------------------------------
+#
+# This section used to assert the opposite, and the reversal is the point: the
+# window was agents-only by decision, and the person who made that decision
+# changed it after watching a chat run with no cat. The test is replaced rather
+# than deleted so the guard keeps standing where the old one stood.
 
 
-def test_the_chat_mode_opens_no_window(project_dir, spawned, monkeypatch):
-    """AC negative: in the chat the run is the conversation the human is
-    already reading. This guards the fix from leaking into the other mode."""
+@pytest.fixture
+def chat(monkeypatch, project_dir):
+    """The chat command with a window allowed and a chat pid to find."""
     import autoloop_command as command
 
-    monkeypatch.setattr(command, "chat_pid", lambda: 999)  # reach the spawn below
+    monkeypatch.setattr(window, "under_test", lambda: False)
+    monkeypatch.setattr(command, "chat_pid", lambda: 999)
+    return command
 
-    command.start(str(project_dir), "разгреби очередь")
 
-    assert spawned, "наблюдатель не поднялся — тест перестал что-либо проверять"
+def test_the_chat_mode_opens_the_window_too(chat, spawned, project_dir):
+    """The chat shows the work, not how full the context is or how long the
+    run has gone. That is what the cat carries, and it is wanted in both modes.
+    """
+    answer = chat.start(str(project_dir), "разгреби очередь")
+
+    assert len(windows(spawned)) == 1
+    assert "прогон объявлен" in answer
+
+
+def test_a_refused_chat_start_opens_no_window(chat, spawned, project_dir):
+    """AC negative: the window belongs to a declared run. Agents are already
+    running here, so the chat start is refused — and refusing must not paint a
+    window over somebody else's run."""
+    (project_dir / ".tausik" / ".autoloop.run").write_text("4242", encoding="utf-8")
+
+    answer = chat.start(str(project_dir), "разгреби очередь")
+
+    assert "агент" in answer
+    assert windows(spawned) == []
+
+
+def test_the_chat_mode_opens_no_second_window(chat, spawned, project_dir):
+    """AC negative: one window per project, whichever mode asked for it — the
+    lock is shared, not per-mode."""
+    presence.claim_overlay(str(project_dir), os.getpid())
+
+    chat.start(str(project_dir), "разгреби очередь")
+
+    assert windows(spawned) == []
+
+
+def test_a_window_that_cannot_open_does_not_change_the_chat_answer(chat, project_dir, monkeypatch):
+    """AC negative: on ssh there is no display and nothing to say about it. The
+    run is declared, the answer reads exactly as before, and the trouble goes
+    to the log the mechanism already writes."""
+
+    def refuse(cmd, *args, **kwargs):
+        raise OSError("нет графической среды")
+
+    monkeypatch.setattr(subprocess, "Popen", refuse)
+
+    answer = chat.start(str(project_dir), "разгреби очередь")
+
+    assert "прогон объявлен" in answer
+    assert "окно" not in answer
+    log = (project_dir / ".tausik" / "chat-watch.log").read_text(encoding="utf-8")
+    assert "окно прогона не поднять" in log
+
+
+def test_the_chat_mode_opens_no_window_under_a_test_runner(chat, spawned, project_dir, monkeypatch):
+    """The 58 windows came from the supervisor path; this closes the same door
+    on the chat path before it is ever opened."""
+    monkeypatch.setattr(window, "under_test", lambda: True)
+
+    chat.start(str(project_dir), "разгреби очередь")
+
     assert windows(spawned) == []
 
 
 # --- the guard that travels with the code ---------------------------------
 
 
-def test_the_supervisor_recognises_a_test_runner():
+def test_the_mechanism_recognises_a_test_runner():
     """Not a tautology: this assertion is made BY a test runner, so it starts
     failing the moment the detector stops recognising one."""
-    assert autoloop.under_test() is True
+    assert window.under_test() is True
 
 
 def test_a_run_under_a_test_runner_opens_no_window(loop_env, spawned, monkeypatch):
     """The guard that survives deployment. The conftest fixture below covers
     this suite; a project receives a flat `tests/` copy without it, and the
-    library sits in nine projects. So the refusal lives in the supervisor.
+    library sits in nine projects. So the refusal lives in the code.
     """
-    monkeypatch.setattr(autoloop, "under_test", lambda: True)
+    monkeypatch.setattr(window, "under_test", lambda: True)
 
     run_loop()
 

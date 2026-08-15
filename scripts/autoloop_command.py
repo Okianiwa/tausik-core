@@ -22,12 +22,14 @@ import autoloop_chat_cycle as cycle
 import autoloop_keys as keys
 import autoloop_run_state as run_state
 import autoloop_watch as watch
+import autoloop_window as window
 
 
 def _int_or_none(value) -> int | None:
     """The chat pid, or None. The optional import answers Any, and a
     function that promises int|None must not pass that through."""
     return None if value is None else int(value)
+
 
 QUEUE = "очередь задач TAUSIK"
 AGENTS_STOP_FILE = os.path.join(".tausik", ".autoloop.stop")
@@ -61,6 +63,17 @@ def start(project_dir: str, direction: str) -> str:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     if not cycle.start_run(project_dir, direction, now):
         return "не удалось объявить прогон — файл не записался"
+
+    # Right here, not further down: from this line the run exists, and the
+    # window belongs to the run rather than to any of the watcher outcomes
+    # below. The chat shows the work as it happens, but not how full the
+    # window is or how long the run has gone — that is what the cat carries.
+    trouble = window.spawn_overlay(project_dir)
+    if trouble:
+        # Deliberately not part of the answer: the run is declared either way,
+        # and a person on ssh does not need to be told a window failed to open.
+        # The trace goes where the mechanism's own words already go.
+        watch.log(project_dir, f"окно прогона не поднять: {trouble}")
 
     if os.path.exists(os.path.join(project_dir, watch.STOP_FILE)):
         return (

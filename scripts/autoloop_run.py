@@ -35,6 +35,7 @@ from autoloop.state import (  # noqa: E402
     read_state,
 )
 import autoloop_git  # noqa: E402
+import autoloop_window as window  # noqa: E402
 from autoloop_limits import session_spent  # noqa: E402
 from autoloop_child import (  # noqa: E402
     build_prompt,
@@ -162,59 +163,6 @@ def report_session_closure(
     return True
 
 
-def under_test() -> bool:
-    """Is this interpreter running a test suite?
-
-    Asked before opening a window, because the window is the one thing here
-    that deliberately outlives its parent. Measured: three suite runs left 58
-    live tkinter windows on a desktop — the spawn sits three calls below any
-    test that starts a loop, and every one of those windows survived pytest
-    exactly as designed.
-
-    The refusal lives in the code rather than in a fixture because fixtures do
-    not travel: a project receives a flat `tests/` copy without this suite's
-    conftest, and the library is deployed to nine of them.
-    """
-    return "PYTEST_CURRENT_TEST" in os.environ or "pytest" in sys.modules
-
-
-def spawn_overlay(project_dir: Path | str) -> str:
-    """Put the window up for a run nobody is sitting in front of.
-
-    Agents mode frees the chat and usually empties the chair with it, so the
-    window becomes the only place the run is visible at a glance. Detached the
-    way the watcher is, for the reason measured there: an unredirected child
-    keeps the parent's pipe open, and whoever started the run then hears
-    nothing from it until it dies.
-
-    The process is not kept: the run must neither wait on the window nor take
-    it down at the end — a cat that goes to sleep in the corner is the report.
-
-    Returns a message to log, or "" when a window is up or was already open.
-    """
-    import autoloop_presence as presence
-
-    if under_test():
-        return ""
-    if presence.overlay_is_open(str(project_dir)):
-        return ""
-    # Detached on Windows so the window is not taken down with the supervisor:
-    # it is meant to still be there, cat asleep, when the run has finished.
-    flags = (0x00000008 | 0x00000200) if os.name == "nt" else 0  # DETACHED | NEW_GROUP
-    try:
-        subprocess.Popen(
-            [sys.executable, os.path.abspath(__file__), "overlay"],
-            cwd=str(project_dir),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=flags,
-        )
-    except (OSError, ValueError) as e:
-        return str(e)
-    return ""
-
-
 def loop(args: argparse.Namespace) -> int:
     from autoloop_brakes import BrakeState, check_brakes, clear_stop_switch
 
@@ -274,7 +222,7 @@ def loop(args: argparse.Namespace) -> int:
     # A window is a nicety, not a precondition. On a headless box there is no
     # display and the run is just as valid, so trouble here is one line in the
     # log — never a reason to refuse work nobody is watching anyway.
-    trouble = spawn_overlay(project_dir)
+    trouble = window.spawn_overlay(project_dir)
     if trouble:
         log(f"[autoloop] окно прогона не поднять ({trouble}) — прогон идёт без него")
 
