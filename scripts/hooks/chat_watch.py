@@ -75,6 +75,16 @@ def mark_started(project_dir: str, transcript=None) -> None:
             f.write(str(os.getpid()))
     except OSError:
         pass
+    remember_transcript(project_dir, transcript)
+
+
+def remember_transcript(project_dir: str, transcript=None) -> None:
+    """Record which transcript this session speaks into.
+
+    A second, non-consumed file: after a wipe the watcher must follow the new
+    conversation, and a watcher still reading the old file sees a chat that
+    never speaks — the state in which it wipes somebody mid-sentence.
+    """
     if not transcript:
         return
     try:
@@ -113,6 +123,13 @@ def main() -> int:
     enabled = watch_enabled(project_dir)
     # A watcher started by hand is also owed the mark; without it that watcher
     # waits out its timeout after every `/clear`.
+    # The transcript pointer is recorded on EVERY session start, run or no run.
+    # A run is usually declared mid-session, after the chat has come up, so
+    # writing it only under `enabled` left the pointer naming the previous
+    # conversation — the window read that dead session's fill as this one's.
+    # The pid mark stays conditional: it is a signal the watcher consumes, and
+    # nobody is waiting for it outside a run.
+    remember_transcript(project_dir, data.get("transcript_path"))
     if enabled or os.path.exists(os.path.join(project_dir, ".tausik", ".chat-watch.lock")):
         mark_started(project_dir, data.get("transcript_path"))
     if not enabled:

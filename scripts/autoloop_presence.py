@@ -66,21 +66,58 @@ def newest_transcript(folder):
     return newest
 
 
+# A pointer that lost a race by a few seconds is still this session's. Only a
+# conversation that has been overtaken by a clearly newer one is abandoned.
+POINTER_TOLERANCE = 60.0
+
+
+def pointer_is_current(path: str, project_dir: str, tolerance: float = POINTER_TOLERANCE) -> bool:
+    """Does the recorded transcript still name the conversation being held?
+
+    The pointer is written by the SessionStart hook, so it is only as fresh as
+    the last session start. Restart the chat and declare the run afterwards —
+    the ordinary order — and it still names the PREVIOUS conversation: the
+    window then reports the dead session's fill as this one's, and the watcher
+    waits for silence on a file that will never grow again.
+
+    A pointer whose file is not on disk yet is kept. Claude Code creates the
+    transcript on the first message, and dropping the name for that reason sent
+    every session start down the guessing path — where the guess was wrong.
+
+    The cost, stated rather than assumed: two chats open on one project, one of
+    them idle, and the idle one follows the busy one's transcript. That is the
+    same exposure the no-pointer fallback already carries, and it lasts until
+    the next session start, whereas a stale pointer lasts forever.
+    """
+    try:
+        mine = os.path.getmtime(path)
+    except OSError:
+        return True
+    newest = newest_transcript(transcript_dir(project_dir))
+    if not newest or os.path.normcase(newest) == os.path.normcase(path):
+        return True
+    try:
+        theirs = os.path.getmtime(newest)
+    except OSError:
+        return True
+    return (theirs - mine) <= tolerance
+
+
 def current_session(project_dir: str):
     """The transcript this session was given by the last SessionStart hook.
 
-    Returned whether or not the file is on disk yet: Claude Code creates it on
-    the first message, so a fresh session has the name minutes before the file.
-    Dropping the name for that reason sent every session start down the guessing
-    path — and the guess was wrong. Outlives `known`: after a wipe the
-    conversation continues in a different file.
+    Returned whether or not the file is on disk yet (see `pointer_is_current`),
+    but not once a newer conversation has overtaken it. Outlives `known`: after
+    a wipe the conversation continues in a different file.
     """
     try:
         with open(os.path.join(project_dir, SESSION_FILE), encoding="utf-8") as f:
             path = f.read().strip()
     except OSError:
         return None
-    return path or None
+    if not path:
+        return None
+    return path if pointer_is_current(path, project_dir) else None
 
 
 def transcript_path(project_dir: str, known: str | None = None):

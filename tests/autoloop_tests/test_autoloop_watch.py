@@ -1,9 +1,12 @@
 """The watcher: when it acts, when it refuses, and whose chat it belongs to."""
 
 import json
+import os
+import time
 
 import autoloop_chat_cycle as cycle_state
 import autoloop_presence as presence
+import autoloop_run_state as run_state
 import autoloop_watch as watch
 import chat_watch as hook  # hooks/ is on the path via conftest
 import pytest
@@ -467,6 +470,138 @@ def test_a_fresh_session_is_not_wiped_before_it_has_spoken(project_dir, tmp_path
     assert watch.should_act(99, threshold=30, quiet_for=quiet) is False
 
 
+# --- the pointer that outlived its conversation ----------------------------
+
+
+def _transcript_folder(tmp_path, monkeypatch):
+    """The folder Claude Code keeps THIS project's transcripts in."""
+    folder = tmp_path / ".claude" / "projects" / "D--Claude-mcp"
+    folder.mkdir(parents=True)
+    monkeypatch.setattr(presence.os.path, "expanduser", lambda p: p.replace("~", str(tmp_path), 1))
+    monkeypatch.setattr(presence, "project_slug", lambda _d: "D--Claude-mcp")
+    return folder
+
+
+def _transcript(folder, name, seconds_ago=0):
+    path = folder / name
+    path.write_text("{}", encoding="utf-8")
+    if seconds_ago:
+        stamp = time.time() - seconds_ago
+        os.utime(path, (stamp, stamp))
+    return path
+
+
+def test_a_pointer_left_by_a_previous_session_is_not_followed(project_dir, tmp_path, monkeypatch):
+    """The pointer is written by the SessionStart hook, so it is only as fresh
+    as the last session start — and a run is normally declared MID-session,
+    after a restart. The window then reported the ended conversation's fill
+    (58.4%) as this one's (22.5%), and the watcher waited for silence on a file
+    that will never grow again."""
+    folder = _transcript_folder(tmp_path, monkeypatch)
+    ended = _transcript(folder, "ended.jsonl", seconds_ago=1800)
+    current = _transcript(folder, "current.jsonl")
+    hook.mark_started(str(project_dir), str(ended))
+
+    assert watch.transcript_path(str(project_dir)) == str(current)
+
+
+def test_the_pointer_wins_while_its_conversation_is_the_live_one(
+    project_dir, tmp_path, monkeypatch
+):
+    """NEGATIVE: an older file lying beside it must not pull the watcher off
+    the session it was actually given — that is what the pointer is for."""
+    folder = _transcript_folder(tmp_path, monkeypatch)
+    mine = _transcript(folder, "mine.jsonl")
+    _transcript(folder, "someone-else.jsonl", seconds_ago=1800)
+    hook.mark_started(str(project_dir), str(mine))
+
+    assert watch.transcript_path(str(project_dir)) == str(mine)
+
+
+def test_a_named_session_whose_file_is_unborn_survives_a_busy_neighbour(
+    project_dir, tmp_path, monkeypatch
+):
+    """NEGATIVE: a fresh session is named minutes before its file exists, and
+    the transcript it replaces is the freshest thing on disk at that moment.
+    Judging the pointer by mtime alone would hand the new session the old
+    conversation — dead end #19's failure, one step removed."""
+    folder = _transcript_folder(tmp_path, monkeypatch)
+    (folder / "just-ended.jsonl").write_text("{}", encoding="utf-8")
+    unborn = folder / "not-yet.jsonl"
+    hook.mark_started(str(project_dir), str(unborn))
+
+    assert watch.transcript_path(str(project_dir)) == str(unborn)
+
+
+def test_the_session_pointer_is_recorded_without_a_run(project_dir, tmp_path, monkeypatch):
+    """The pointer must not depend on a run being declared: the declaration
+    comes later, and by then the hook has already run and gone."""
+    monkeypatch.setattr(hook, "watch_enabled", lambda _d: False)
+    monkeypatch.setattr(hook, "payload", lambda: {"transcript_path": str(tmp_path / "now.jsonl")})
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_dir))
+
+    assert hook.main() == 0
+    pointer = project_dir / ".tausik" / ".chat.session"
+    assert pointer.read_text(encoding="utf-8") == str(tmp_path / "now.jsonl")
+    assert not (project_dir / ".tausik" / ".chat.started").exists(), (
+        "the pid mark is a signal the watcher consumes — outside a run nobody is waiting for it"
+    )
+
+
+# --- one source for the number ---------------------------------------------
+
+
+def _transcript_with(folder, tokens):
+    path = folder / "live.jsonl"
+    path.write_text(
+        json.dumps({"message": {"model": "claude-opus-5", "usage": {"input_tokens": tokens}}}),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_the_live_transcript_outranks_a_stored_reading(project_dir, tmp_path, monkeypatch):
+    """The stored reading is written once per turn, and a turn can run for an
+    hour. The watcher decides on the same figure the window shows, or it arms a
+    cleanup against a number the human is not looking at."""
+    folder = _transcript_folder(tmp_path, monkeypatch)
+    hook.mark_started(str(project_dir), str(_transcript_with(folder, 120_000)))
+    readings = project_dir / ".tausik" / "autoloop"
+    readings.mkdir(parents=True, exist_ok=True)
+    (readings / "old-session.json").write_text(json.dumps({"percent": 99.0}), encoding="utf-8")
+    run_state._live_percent_cache.clear()
+
+    assert run_state.current_percent(str(project_dir)) == 12.0
+
+
+def test_an_unreadable_transcript_falls_back_to_the_stored_reading(
+    project_dir, tmp_path, monkeypatch
+):
+    """NEGATIVE: losing the transcript must not silently mean "0% full" — the
+    last measurement is still the best answer available."""
+    _transcript_folder(tmp_path, monkeypatch)
+    hook.mark_started(str(project_dir), str(tmp_path / "gone.jsonl"))
+    readings = project_dir / ".tausik" / "autoloop"
+    readings.mkdir(parents=True, exist_ok=True)
+    (readings / "recent.json").write_text(json.dumps({"percent": 44.0}), encoding="utf-8")
+    run_state._live_percent_cache.clear()
+
+    assert run_state.current_percent(str(project_dir)) == 44.0
+
+
+def test_nothing_readable_at_all_is_not_a_reading_of_zero(project_dir, tmp_path, monkeypatch):
+    """NEGATIVE: no transcript and no stored reading is 'unknown', and
+    `should_act` refuses on unknown."""
+    _transcript_folder(tmp_path, monkeypatch)
+    hook.mark_started(str(project_dir), str(tmp_path / "gone.jsonl"))
+    run_state._live_percent_cache.clear()
+
+    percent = run_state.current_percent(str(project_dir))
+
+    assert percent is None
+    assert watch.should_act(percent, threshold=30, quiet_for=600) is False
+
+
 # --- finding the folder at all ---------------------------------------------
 
 
@@ -514,7 +649,7 @@ def spin_watch(monkeypatch, project_dir, screens, ticks=3, quiet=600.0):
     cycle_state.start_run(str(project_dir), "очередь задач")
     monkeypatch.setattr(watch.keys, "pid_exists", lambda _pid: True)
     monkeypatch.setattr(watch, "alive", lambda _pid: next(beats))
-    monkeypatch.setattr(watch, "reading", lambda _p: 99)
+    monkeypatch.setattr(watch, "current_percent", lambda _p: 99)
     monkeypatch.setattr(watch, "transcript_path", lambda *_a: "chat.jsonl")
     monkeypatch.setattr(watch, "idle_seconds", lambda *_a, **_k: quiet)
     monkeypatch.setattr(watch.keys, "console_text", lambda _pid: next(screens))

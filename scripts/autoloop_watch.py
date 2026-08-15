@@ -15,8 +15,6 @@ Three refusals hold the whole design together:
 
 from __future__ import annotations
 
-import glob
-import json
 import os
 import subprocess
 import sys
@@ -25,6 +23,11 @@ from typing import IO
 
 import autoloop_keys as keys
 from autoloop_limits import session_spent, status_text  # noqa: F401 — status_text: tests
+from autoloop_run_state import (  # noqa: F401 — MAX_READING_AGE, reading: tests
+    MAX_READING_AGE,
+    current_percent,
+    reading,
+)
 from autoloop_presence import (
     background_pids,
     idle_seconds,
@@ -56,7 +59,6 @@ ERR_FILE = os.path.join(".tausik", "chat-watch.err.log")
 LOCK_FILE = os.path.join(".tausik", ".chat-watch.lock")
 STOP_FILE = os.path.join(".tausik", ".chat-watch.stop")
 
-MAX_READING_AGE = 180.0
 IDLE_SECONDS = 45.0  # quiet before the chat counts as "not in use right now"
 POLL_SECONDS = 2.0
 ESC = "\x1b"
@@ -70,28 +72,6 @@ def log(project_dir: str, message: str) -> None:
             f.write(f"{stamp} {message}\n")
     except OSError:
         pass
-
-
-def reading(project_dir: str, max_age=MAX_READING_AGE, now=None):
-    """This session's window fill, or None.
-
-    A reading older than `max_age` belongs to somebody else's run: a stale 33%
-    once armed a cleanup on a chat that had said one word.
-    """
-    now = time.time() if now is None else now
-    newest, newest_mtime = None, -1.0
-    for path in glob.glob(os.path.join(project_dir, ".tausik", "autoloop", "*.json")):
-        try:
-            mtime = os.path.getmtime(path)
-            if mtime <= newest_mtime or (now - mtime) > max_age:
-                continue
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, ValueError):
-            continue
-        if isinstance(data, dict) and "percent" in data:
-            newest, newest_mtime = data.get("percent"), mtime
-    return newest
 
 
 def should_act(
@@ -276,7 +256,7 @@ def watch(
             if halt:
                 log(project_dir, halt)
                 return 0
-            percent = reading(project_dir)
+            percent = current_percent(project_dir)
             path = transcript_path(project_dir, transcript)
             quiet = idle_seconds(path)
             now = time.monotonic()
@@ -286,8 +266,12 @@ def watch(
             working = background_pids(pid, keys.process_table(), own)
             if bool(working) != busy:
                 busy = bool(working)
-                log(project_dir, f"фоновая работа: {len(working)} процессов, уборка ждёт"
-                    if busy else "фоновая работа кончилась, отсчёт тишины заново")
+                log(
+                    project_dir,
+                    f"фоновая работа: {len(working)} процессов, уборка ждёт"
+                    if busy
+                    else "фоновая работа кончилась, отсчёт тишины заново",
+                )
             if busy:
                 busy_since = now
             elif busy_since is not None and quiet is not None:
@@ -337,8 +321,6 @@ def watch(
         release_lock(project_dir)
     log(project_dir, "чат закрыт — наблюдатель уходит")
     return 0
-
-
 
 
 def spawn(project_dir: str, pid: int, transcript: str | None = None) -> None:

@@ -8,8 +8,10 @@ itself what "a run is going" means.
 
 from __future__ import annotations
 
+import glob
 import json
 import os
+import time
 from datetime import datetime, timezone
 
 # Agents mode runs the queue in separate `claude -p` processes; chat mode runs
@@ -17,6 +19,9 @@ from datetime import datetime, timezone
 # so a viewer has to know which one it is looking at.
 MODE_AGENTS = "agents"
 MODE_CHAT = "chat"
+
+# Older than this, a stored reading is somebody else's run, not this one's.
+MAX_READING_AGE = 180.0
 
 _AGENTS_MARKER = ".autoloop.run"
 _CHAT_MARKER = ".chat-loop.json"
@@ -61,6 +66,45 @@ def live_percent(project_dir: str) -> float | None:
     percent = percent_full(usage.get("tokens")) if usage.get("ok") else None
     _live_percent_cache[path] = (stat.st_mtime, stat.st_size, percent)
     return percent
+
+
+def reading(project_dir: str, max_age=MAX_READING_AGE, now=None):
+    """The freshest STORED reading, or None.
+
+    Written by the Stop hook, once per agent turn. A reading older than
+    `max_age` belongs to somebody else's run: a stale 33% once armed a cleanup
+    on a chat that had said one word.
+    """
+    now = time.time() if now is None else now
+    newest, newest_mtime = None, -1.0
+    for path in glob.glob(os.path.join(project_dir, ".tausik", "autoloop", "*.json")):
+        try:
+            mtime = os.path.getmtime(path)
+            if mtime <= newest_mtime or (now - mtime) > max_age:
+                continue
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and "percent" in data:
+            newest, newest_mtime = data.get("percent"), mtime
+    return newest
+
+
+def current_percent(project_dir: str, now=None):
+    """How full the window is, from the ONE source the whole mechanism uses.
+
+    The transcript answers first: it is current, while a stored reading is as
+    old as the last turn boundary — and a turn can run for an hour. The stored
+    reading remains the fallback for when the transcript cannot be read at all.
+
+    Both the watcher (which decides whether to clean up) and the window (which
+    tells the human why) call this. Two readers of the same question drifted
+    apart once already: the window showed the live figure while the watcher was
+    still arming on a reading from a conversation that had already ended.
+    """
+    live = live_percent(project_dir)
+    return live if live is not None else reading(project_dir, now=now)
 
 
 def chat_run(project_dir: str) -> dict:
