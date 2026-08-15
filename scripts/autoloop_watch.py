@@ -31,6 +31,7 @@ from autoloop_run_state import (  # noqa: F401 — MAX_READING_AGE, reading: tes
 )
 from autoloop_presence import (
     background_pids,
+    human_idle_seconds,
     idle_seconds,
     own_pids,
     register_own,
@@ -313,13 +314,17 @@ def watch(
                     project_dir,
                     f"окно на {percent}%, тишина {int(quiet)} с — жду {int(ARM_SECONDS)} с",
                 )
-            if (
-                cycle.state != "idle"
-                and (quiet is None or quiet < IDLE_SECONDS)
-                and cycle.cancel(now=now)
-            ):
-                # Someone started talking during the countdown; their turn wins.
-                log(project_dir, "отменено: человек вернулся в чат")
+            if cycle.state != "idle":
+                # By the HUMAN's last turn, not the file's mtime: the agent
+                # writes to the same transcript, so every step it took read as
+                # somebody walking in. Measured on a live run — the cancel
+                # landed two seconds after background work started, logged
+                # "человек вернулся в чат" with nobody in the room, and cost
+                # ten minutes of cooldown on a full window.
+                human_quiet = human_idle_seconds(path)
+                if (human_quiet is None or human_quiet < IDLE_SECONDS) and cycle.cancel(now=now):
+                    # Someone started talking during the countdown; their turn wins.
+                    log(project_dir, "отменено: человек вернулся в чат")
             if cycle.due(now):
                 # The last look before typing. A draft grows without touching
                 # the transcript, so this comparison is the only thing standing

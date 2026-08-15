@@ -652,6 +652,10 @@ def spin_watch(monkeypatch, project_dir, screens, ticks=3, quiet=600.0):
     monkeypatch.setattr(watch, "current_percent", lambda _p: 99)
     monkeypatch.setattr(watch, "transcript_path", lambda *_a: "chat.jsonl")
     monkeypatch.setattr(watch, "idle_seconds", lambda *_a, **_k: quiet)
+    # Обе тишины разведены: эти тесты про последний взгляд на экран, а не про
+    # то, кто написал в транскрипт. Без мока файла нет — «не знаю» отменило бы
+    # уборку раньше, чем очередь дойдёт до сравнения экранов.
+    monkeypatch.setattr(watch, "human_idle_seconds", lambda *_a, **_k: quiet)
     monkeypatch.setattr(watch.keys, "console_text", lambda _pid: next(screens))
     monkeypatch.setattr(watch.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(watch.time, "sleep", lambda _s: None)

@@ -159,6 +159,95 @@ def idle_seconds(path, now=None):
         return None
 
 
+# Транскрипт живого прогона — мегабайты, а спрашивают каждые пару секунд.
+# Хвоста хватает: нужна ПОСЛЕДНЯЯ реплика, а не вся история.
+HUMAN_TAIL_BYTES = 256 * 1024
+
+
+def _stamp(value):
+    """Время записи в секундах эпохи, или None — если его не прочитать."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        from datetime import datetime
+
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def is_human_turn(entry) -> bool:
+    """Написал ли эту запись человек.
+
+    `type=user` сам по себе ничего не значит: результат каждого инструмента
+    приходит той же ролью — в замеренном транскрипте таких записей было 185 из
+    185 «пользовательских». Человека выдаёт текстовое содержимое: строка или
+    блок `text`, но не `tool_result`.
+    """
+    if not isinstance(entry, dict) or entry.get("type") != "user":
+        return False
+    if entry.get("isSidechain") is True:
+        return False
+    message = entry.get("message")
+    if not isinstance(message, dict):
+        return False
+    content = message.get("content")
+    if isinstance(content, str):
+        return bool(content.strip())
+    if isinstance(content, list):
+        return any(isinstance(part, dict) and part.get("type") == "text" for part in content)
+    return False
+
+
+def human_idle_seconds(path, now=None, tail: int = HUMAN_TAIL_BYTES):
+    """Сколько человек молчит, или None — «не знаю».
+
+    Отдельно от `idle_seconds`, который смотрит на mtime файла. В транскрипт
+    пишет и агент, поэтому по mtime его работа неотличима от прихода человека:
+    на живом прогоне взведённая уборка отменилась через две секунды после
+    старта фоновой работы, лог сказал «человек вернулся в чат», и это стоило
+    десяти минут карантина при заполненном окне.
+
+    Пустой хвост без человеческих реплик — не «не знаю», а «молчит дольше, чем
+    прочитанный кусок»: файл читается, просто человек в нём давно не говорил.
+    """
+    now = time.time() if now is None else now
+    if not path:
+        return None
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            if size > tail:
+                f.seek(size - tail)
+                f.readline()  # обрывок строки в начале куска — не запись
+            chunk = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+
+    newest_human, oldest_seen = None, None
+    for raw in chunk.splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            entry = json.loads(raw)
+        except ValueError:
+            continue
+        stamp = _stamp(entry.get("timestamp"))
+        if stamp is None:
+            continue
+        if oldest_seen is None or stamp < oldest_seen:
+            oldest_seen = stamp
+        if is_human_turn(entry) and (newest_human is None or stamp > newest_human):
+            newest_human = stamp
+
+    if newest_human is not None:
+        return max(0.0, now - newest_human)
+    if oldest_seen is not None:
+        return max(0.0, now - oldest_seen)  # нижняя граница молчания
+    return None
+
+
 def register_own(project_dir: str, pid: int | None = None) -> None:
     """Announce a process as part of the mechanism. Never raises: a registry
     that cannot be written costs a delayed cleanup, not a broken run."""
