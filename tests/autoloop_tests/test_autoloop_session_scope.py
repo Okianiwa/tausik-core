@@ -22,7 +22,7 @@ import autoloop_handoff as handoff
 import autoloop_journal as journal
 import autoloop_run as autoloop
 from autoloop import autonomy, session_guard
-from conftest import SCRIPTS_DIR
+from .conftest import SCRIPTS_DIR
 
 from autoloop.state import read_session_row
 from autoloop_child import build_prompt

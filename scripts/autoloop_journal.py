@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Any
 from datetime import datetime, timezone
 
 JOURNAL_FILENAME = "autoloop-run.jsonl"
@@ -86,7 +87,7 @@ def read_events(project_dir: str, event: str | None = None) -> list[dict]:
 
 def open_iteration(project_dir: str, iteration: int, task_slug: str, status_before: dict) -> dict:
     """Record the start of an iteration. The returned dict is closed later."""
-    entry = {
+    entry: dict[str, Any] = {
         "iteration": iteration,
         "task_slug": task_slug,
         "started_at": _now(),

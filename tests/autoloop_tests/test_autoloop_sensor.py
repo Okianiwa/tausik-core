@@ -5,7 +5,7 @@ import json
 
 import autoloop_chat_cycle
 import pytest
-from conftest import assistant_entry
+from .conftest import assistant_entry
 
 from autoloop import sensor
 from autoloop.state import (

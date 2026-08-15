@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 import pytest
-from conftest import assistant_entry
+from .conftest import assistant_entry
 
 import autoloop_run as autoloop
 from autoloop import exit_guard, sensor

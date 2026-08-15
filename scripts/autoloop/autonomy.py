@@ -90,7 +90,7 @@ def warn_if_misconfigured(project_dir: str) -> str | None:
             "активирован. Без гейтов автономная работа не запускается."
         ),
     }
-    return messages.get(reason)
+    return messages.get(reason) if reason is not None else None
 
 
 def create_run_marker(project_dir: str, pid: int) -> bool:

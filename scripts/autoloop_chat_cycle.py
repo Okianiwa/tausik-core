@@ -242,7 +242,7 @@ def needs_maintenance(percent, threshold) -> bool:
     """A missing measurement is not a full window."""
     if not isinstance(percent, (int, float)) or isinstance(percent, bool):
         return False
-    return percent >= threshold
+    return bool(percent >= threshold)
 
 
 def draft_changed(before, after) -> bool:

@@ -330,7 +330,7 @@ def _screen_tail(k32, lines: int):
                 ctypes.byref(read),
             ):
                 return None
-            rows.append(buffer[: read.value].rstrip())
+            rows.append(str(buffer[: read.value]).rstrip())
         return "\n".join(rows)
     finally:
         k32.CloseHandle(handle)
@@ -354,7 +354,7 @@ class PROCESSENTRY32(ctypes.Structure):
 def process_table() -> dict:
     """{pid: (parent_pid, exe_name)} from one snapshot — no child processes,
     no flashing windows."""
-    table = {}
+    table: dict[int, tuple[int, str]] = {}
     k32 = kernel32()
     if k32 is None:
         return table
@@ -386,7 +386,12 @@ def main(argv: list[str]) -> int:
         print("использование: autoloop_keys.py <pid> <текст>")
         print(f"запущенные чаты: {find_chat_pids()}")
         return 0
-    pid, text = argv[0], " ".join(argv[1:])
+    try:
+        pid = int(argv[0])
+    except ValueError:
+        print(f"не pid: {argv[0]!r}")
+        return 2
+    text = " ".join(argv[1:])
     sent, reason = send_to_console(pid, text)
     # Printed after the console is back: while attached, this would land in
     # the other window.

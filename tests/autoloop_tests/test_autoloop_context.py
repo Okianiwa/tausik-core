@@ -9,7 +9,7 @@ from autoloop.context import (
     percent_full,
     read_context_usage,
 )
-from conftest import assistant_entry
+from .conftest import assistant_entry
 
 
 def test_counts_input_plus_both_cache_tiers(transcript):

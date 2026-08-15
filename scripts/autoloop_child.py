@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from typing import Any
 from pathlib import Path
 
 import autoloop_git
@@ -119,7 +120,7 @@ def run_iteration(
             "tokens": {},
         }
 
-    result = {
+    result: dict[str, Any] = {
         "returncode": completed.returncode,
         "error": None,
         "cost_usd": 0.0,

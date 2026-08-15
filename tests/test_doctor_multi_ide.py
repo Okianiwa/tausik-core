@@ -131,6 +131,15 @@ class TestNoNewClaudeLiterals:
             "warning moved here from project_cli.py (status-cli-mcp-divergence)"
         ),
         "service_roles.py": "DEPLOYED_ROLES_DIR_REL is the last-resort fallback constant",
+        # The autoloop is Claude-Code-specific by construction, not by omission:
+        # it drives that host's own chat (reading ~/.claude/projects transcripts,
+        # feeding /clear and /start to it) and grants autonomy through that
+        # host's permission profile. There is no other IDE for these paths to
+        # resolve to — a generalised lookup here would return a directory the
+        # mechanism cannot use.
+        "autoloop_git.py": "writes .claude/settings.autonomy.json — the Claude Code permission profile the run executes under",
+        "autoloop_handoff.py": "imports the deployed .claude/scripts of the chat it drives",
+        "autoloop_presence.py": "~/.claude/projects is Claude Code's own transcript store — the only place chat activity can be read",
         "hooks/session_start.py": "documented fallback when the hook cannot locate its profile",
         "hooks/session_metrics.py": (
             "~/.claude/projects is Claude Code's own transcript store in the user's HOME, "

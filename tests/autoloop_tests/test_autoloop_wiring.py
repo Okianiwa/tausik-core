@@ -13,7 +13,7 @@ import sys
 
 import autoloop_chat_cycle as cycle
 import chat_watch as hook
-from conftest import AUTONOMY_PROFILE
+from .conftest import AUTONOMY_PROFILE
 
 sys.path.insert(0, str(AUTONOMY_PROFILE.parents[2] / "bootstrap"))
 

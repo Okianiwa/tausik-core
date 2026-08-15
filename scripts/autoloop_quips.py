@@ -166,7 +166,8 @@ class QuipPicker:
         options = QUIPS.get(reason) or QUIPS[REASON_IDLE]
         # A line naming a task is only offered when there is a task to name:
         # the cat reports, it does not invent.
-        options = [line for line in options if task or "{task}" not in line]
+        kept: list[str] = [line for line in options if task or "{task}" not in line]
+        options = tuple(kept)
         if not options:
             return ""
         previous = self._last_by_reason.get(reason)

@@ -21,6 +21,7 @@ import os
 import subprocess
 import sys
 import time
+from typing import IO
 
 import autoloop_keys as keys
 from autoloop_limits import session_spent, status_text  # noqa: F401 — status_text: tests
@@ -330,6 +331,7 @@ def spawn(project_dir: str, pid: int, transcript: str | None = None) -> None:
     command = [sys.executable, os.path.abspath(__file__), "--pid", str(pid)]
     if transcript:
         command += ["--transcript", transcript]
+    errors: IO[str] | int
     try:
         errors = open(os.path.join(project_dir, ERR_FILE), "a", encoding="utf-8")
     except OSError:

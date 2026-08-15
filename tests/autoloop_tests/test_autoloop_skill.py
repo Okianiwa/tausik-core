@@ -11,7 +11,7 @@ import autoloop_run as autoloop
 from autoloop import autonomy
 from autoloop_child import build_prompt, claude_command
 from autoloop_git import GIT_COMMIT, GIT_FULL, GIT_OFF, build_profile, prompt_note
-from conftest import SKILLS_DIR
+from .conftest import SKILLS_DIR
 
 BASE_PROFILE = {
     "permissions": {

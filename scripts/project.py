@@ -166,7 +166,10 @@ def main() -> None:
     # catches it). The handler takes no service; don't build one.
     svc = None if args.command in _NO_DB_COMMANDS else get_service()
     try:
-        fn(svc, args)
+        # The dispatch table is typed as "handler takes a service", which holds
+        # for every command but the _NO_DB_COMMANDS few — those are declared
+        # above precisely because they must run without one.
+        fn(svc, args)  # type: ignore[arg-type]
     except (ServiceError, SkillManagerError) as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)

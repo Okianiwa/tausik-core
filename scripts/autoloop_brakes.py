@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 STOP_FILENAME = ".autoloop.stop"
 
@@ -45,7 +46,7 @@ class BrakeState:
         An override of None means "flag not given" — otherwise argparse's
         defaults would silently shadow every configured value.
         """
-        values = {
+        values: dict[str, Any] = {
             "max_iterations": int(config.get("max_iterations") or 20),
             "max_idle_iterations": int(config.get("max_idle_iterations") or 3),
             "max_crash_streak": int(config.get("max_crash_streak") or 2),

@@ -23,6 +23,12 @@ import autoloop_keys as keys
 import autoloop_run_state as run_state
 import autoloop_watch as watch
 
+
+def _int_or_none(value) -> int | None:
+    """The chat pid, or None. The optional import answers Any, and a
+    function that promises int|None must not pass that through."""
+    return None if value is None else int(value)
+
 QUEUE = "очередь задач TAUSIK"
 AGENTS_STOP_FILE = os.path.join(".tausik", ".autoloop.stop")
 
@@ -34,9 +40,9 @@ def chat_pid() -> int | None:
     chats open, guessing means declaring a run over somebody else's window.
     """
     try:
-        import chat_watch
+        import chat_watch  # type: ignore[import-not-found]  # deployed under hooks/, optional here
 
-        return chat_watch.owning_chat(os.getpid(), keys.process_table())
+        return _int_or_none(chat_watch.owning_chat(os.getpid(), keys.process_table()))
     except ImportError:
         return None
 

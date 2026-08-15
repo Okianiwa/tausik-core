@@ -4,7 +4,7 @@ import io
 import json
 
 import pytest
-from conftest import assistant_entry
+from .conftest import assistant_entry
 
 from autoloop import autonomy as autonomy_mod
 from autoloop import exit_guard

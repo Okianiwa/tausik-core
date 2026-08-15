@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from typing import Any
 
 import autoloop_quips as quips
 import autoloop_tui as tui
@@ -256,7 +257,11 @@ def run_overlay(project_dir: str, config: dict | None = None) -> int:
     hint = tk.Label(frame, text="перетащи · Esc закрыть", font=("Segoe UI", 7), fg="#4a5163", bg=BG)
     hint.place(x=104, y=132)
 
-    state = {"tick": 0, "drag": None, "size": DEFAULT_SIZE, "corner": (x, y)}
+    # Heterogeneous on purpose — a frame counter, a drag offset, a size and a
+    # corner live together because they are one window's mutable state, and
+    # the closures below all read and write it. Annotated so the union does
+    # not collapse into a type none of the members satisfy.
+    state: dict[str, Any] = {"tick": 0, "drag": None, "size": DEFAULT_SIZE, "corner": (x, y)}
     picker = quips.QuipPicker()
 
     def fit() -> None:

@@ -18,7 +18,7 @@ from autoloop.autonomy import (
     status,
     warn_if_misconfigured,
 )
-from conftest import AUTONOMY_PROFILE, LIB_HOOKS_DIR
+from .conftest import AUTONOMY_PROFILE, LIB_HOOKS_DIR
 
 
 @pytest.fixture

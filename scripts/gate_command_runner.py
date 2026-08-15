@@ -80,6 +80,7 @@ def _scope_label(test_files: list[str], total: int) -> str:
         f"file(s) mapped from relevant_files -- NOT the full suite: {named}"
     )
 
+
 # A checker invoked without {files} resolves its own scope from config (mypy:
 # files=["scripts"], exclude=["scripts/hooks/"]). On the commit trigger it judges a
 # temp tree holding ONLY staged content, so a commit touching just scripts/hooks/
@@ -337,11 +338,13 @@ def run_command_gate(gate: dict, files: list[str]) -> tuple[bool, str]:
         if line_filter:
             output = _apply_line_filter(output, line_filter)
         if returncode == 0:
-            return True, output or "Passed."
+            return True, _scoped(output or "Passed.")
         low = output.lower()
+        # The sentinel is internal transport, not output: it carries no scope
+        # label and gate_runner reads it by identity.
         if any(m in low for m in _NOTHING_TO_CHECK_MARKERS):
             return True, _NOTHING_TO_CHECK_SENTINEL
-        return False, output or f"Failed with exit code {returncode}."
+        return False, _scoped(output or f"Failed with exit code {returncode}.")
     except subprocess.TimeoutExpired:
         return False, _scoped(f"Gate timed out ({timeout}s).")
     except (FileNotFoundError, PermissionError, NotADirectoryError) as e:
