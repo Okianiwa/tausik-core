@@ -34,9 +34,7 @@ BASE_PROFILE = {
 def project_with_profile(project_dir):
     claude_dir = project_dir / ".claude"
     claude_dir.mkdir(exist_ok=True)
-    (claude_dir / "settings.autonomy.json").write_text(
-        json.dumps(BASE_PROFILE), encoding="utf-8"
-    )
+    (claude_dir / "settings.autonomy.json").write_text(json.dumps(BASE_PROFILE), encoding="utf-8")
     return project_dir
 
 
@@ -87,9 +85,7 @@ def test_generated_profile_never_overwrites_the_base(project_with_profile):
     build_profile(str(project_with_profile), GIT_OFF)
 
     base = json.loads(
-        (project_with_profile / ".claude" / "settings.autonomy.json").read_text(
-            encoding="utf-8"
-        )
+        (project_with_profile / ".claude" / "settings.autonomy.json").read_text(encoding="utf-8")
     )
     assert "Bash(git push:*)" in base["permissions"]["allow"]
 
@@ -259,3 +255,30 @@ def test_skill_file_documents_every_verb():
     for flag in ("--git-mode", "--direction", "--max-iterations"):
         assert flag in skill, flag
     assert "autoloop_run.py" in skill
+
+
+def test_the_branch_is_chosen_by_the_argument_and_by_nothing_else():
+    """Measured failure, not a hypothetical: the skill used to state the
+    criterion twice. The table picks the branch by a word in the argument; a
+    paragraph three lines above picked it by the human's circumstances — "the
+    path for when the human leaves". The prose is read first, so a request to
+    work in the chat that mentioned «меня не будет» started headless agents,
+    closed the human's session and let an agent decide alone.
+
+    A second criterion anywhere in this file is the defect, regardless of how
+    it is worded — hence the phrase list rather than one exact string.
+    """
+    skill = (SKILLS_DIR / "auto" / "SKILL.md").read_text(encoding="utf-8")
+
+    for phrase in ("когда человек уходит", "человек уходит", "не хочет занимать"):
+        assert phrase not in skill, phrase
+
+
+def test_absence_of_the_human_routes_to_the_chat_branch():
+    """The phrases that misfired must be answered in the file, not left to be
+    inferred: naming them costs one table row and removes the inference."""
+    skill = (SKILLS_DIR / "auto" / "SKILL.md").read_text(encoding="utf-8")
+
+    rows = [line for line in skill.splitlines() if line.startswith("|") and "меня не будет" in line]
+    assert rows, "фразы отсутствия человека не названы в таблице разбора"
+    assert "в этом чате" in rows[0].lower(), rows[0]
