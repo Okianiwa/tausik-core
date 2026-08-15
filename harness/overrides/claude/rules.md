@@ -7,6 +7,7 @@
 ## TAUSIK Integration
 - Skills are in `.claude/skills/` — invoked via `/skill-name`
 - CLI: `.tausik/tausik <command>`
+- PowerShell + a multi-line argument → `.tausik/tausik.ps1`; `.cmd` silently keeps only the first line
 - Database: `.tausik/tausik.db` (SQLite, shared with Cursor if both installed)
 ## Workflow Discipline
 - NEVER start coding without a task (`/task <slug>` or `task start <slug>`)

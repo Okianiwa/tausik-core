@@ -221,18 +221,25 @@ def install_requirements(tausik_dir: str, lib_dir: str) -> bool:
 
 
 def install_cli_wrapper(bootstrap_dir: str, tausik_dir: str) -> None:
-    """Render tausik CLI wrapper scripts (bash + cmd) into .tausik/ and make them executable.
+    """Render tausik CLI wrapper scripts (bash + cmd + ps1) into .tausik/.
 
     The wrapper's IDE-discovery loop is injected from bootstrap_config.IDE_DIRS
     (single source of truth) by substituting the ``__IDE_LIST__`` placeholder —
     add a new IDE to IDE_DIRS and the wrapper picks it up on next bootstrap.
+
+    Three wrappers, not two: cmd.exe ends an argument at a newline while parsing
+    its command line, so every multi-line value that went through `tausik.cmd`
+    — a task log, an `--evidence` block, memory content — reached the CLI as its
+    first line and nothing said so. The PowerShell wrapper passes arguments as
+    an array and keeps them whole; the .cmd stays for callers that have no
+    PowerShell.
     """
     import stat
 
     from bootstrap_config import IDE_DIRS
 
     ide_list = " ".join(IDE_DIRS)
-    for wrapper in ("tausik_wrapper.sh", "tausik_wrapper.cmd"):
+    for wrapper in ("tausik_wrapper.sh", "tausik_wrapper.cmd", "tausik_wrapper.ps1"):
         src = os.path.join(bootstrap_dir, wrapper)
         if not os.path.exists(src):
             continue
@@ -240,10 +247,10 @@ def install_cli_wrapper(bootstrap_dir: str, tausik_dir: str) -> None:
             content = f.read()
         content = content.replace("__IDE_LIST__", ide_list)
         ext = os.path.splitext(wrapper)[1]
-        dst = os.path.join(tausik_dir, f"tausik{ext}" if ext == ".cmd" else "tausik")
+        dst = os.path.join(tausik_dir, "tausik" if ext == ".sh" else f"tausik{ext}")
         # Normalize line endings per platform: .sh must stay LF even on Windows.
-        newline = "\r\n" if ext == ".cmd" else "\n"
+        newline = "\n" if ext == ".sh" else "\r\n"
         with open(dst, "w", encoding="utf-8", newline=newline) as f:
             f.write(content)
-        if ext != ".cmd":
+        if ext == ".sh":
             os.chmod(dst, os.stat(dst).st_mode | stat.S_IEXEC)
