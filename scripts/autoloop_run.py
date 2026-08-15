@@ -162,6 +162,22 @@ def report_session_closure(
     return True
 
 
+def under_test() -> bool:
+    """Is this interpreter running a test suite?
+
+    Asked before opening a window, because the window is the one thing here
+    that deliberately outlives its parent. Measured: three suite runs left 58
+    live tkinter windows on a desktop — the spawn sits three calls below any
+    test that starts a loop, and every one of those windows survived pytest
+    exactly as designed.
+
+    The refusal lives in the code rather than in a fixture because fixtures do
+    not travel: a project receives a flat `tests/` copy without this suite's
+    conftest, and the library is deployed to nine of them.
+    """
+    return "PYTEST_CURRENT_TEST" in os.environ or "pytest" in sys.modules
+
+
 def spawn_overlay(project_dir: Path | str) -> str:
     """Put the window up for a run nobody is sitting in front of.
 
@@ -178,6 +194,8 @@ def spawn_overlay(project_dir: Path | str) -> str:
     """
     import autoloop_presence as presence
 
+    if under_test():
+        return ""
     if presence.overlay_is_open(str(project_dir)):
         return ""
     # Detached on Windows so the window is not taken down with the supervisor:

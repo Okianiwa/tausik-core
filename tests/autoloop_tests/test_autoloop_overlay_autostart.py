@@ -41,6 +41,10 @@ def loop_env(monkeypatch, project_dir):
     """A run that reaches exactly one iteration. Processes come from `spawned`."""
     monkeypatch.setattr(autoloop, "PROJECT_DIR", Path(project_dir))
     monkeypatch.setattr(autoloop, "tausik_cli", lambda _dir: "fake-tausik")
+    # These tests are about what a real run does, so they have to stand where a
+    # real run stands — the runner detector is what they are stepping over, and
+    # it gets its own two tests below.
+    monkeypatch.setattr(autoloop, "under_test", lambda: False)
     claude = []
 
     def fake_cli(project, args, timeout=30):
@@ -148,6 +152,27 @@ def test_the_chat_mode_opens_no_window(project_dir, spawned, monkeypatch):
     command.start(str(project_dir), "разгреби очередь")
 
     assert spawned, "наблюдатель не поднялся — тест перестал что-либо проверять"
+    assert windows(spawned) == []
+
+
+# --- the guard that travels with the code ---------------------------------
+
+
+def test_the_supervisor_recognises_a_test_runner():
+    """Not a tautology: this assertion is made BY a test runner, so it starts
+    failing the moment the detector stops recognising one."""
+    assert autoloop.under_test() is True
+
+
+def test_a_run_under_a_test_runner_opens_no_window(loop_env, spawned, monkeypatch):
+    """The guard that survives deployment. The conftest fixture below covers
+    this suite; a project receives a flat `tests/` copy without it, and the
+    library sits in nine projects. So the refusal lives in the supervisor.
+    """
+    monkeypatch.setattr(autoloop, "under_test", lambda: True)
+
+    run_loop()
+
     assert windows(spawned) == []
 
 
