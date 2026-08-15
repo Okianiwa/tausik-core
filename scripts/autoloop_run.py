@@ -352,6 +352,13 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "run":
         return loop(args)
+    if args.command in ("watch", "overlay"):
+        # Both are descendants of the chat and outlive every turn. Unannounced,
+        # the watcher counts them as the agent's background work and never
+        # cleans the window again — the failure worse than the one it fixes.
+        from autoloop_presence import register_own
+
+        register_own(str(PROJECT_DIR))
     if args.command == "watch":
         import autoloop_screen
 

@@ -63,6 +63,86 @@ def test_no_transcript_reads_as_unknown(tmp_path):
     assert watch.idle_seconds(str(tmp_path / "missing.jsonl")) is None
 
 
+class TestWorkStillRunningIsNotSilence:
+    """A quiet transcript means the TURN ended, not the work. An agent waiting
+    on a background command it started writes nothing for minutes; the cleanup
+    used to land in the middle of that, at a live task, with the result unread.
+    Caught on the v1.8.0 migration: a full test run of 7665 tests, 18 minutes
+    of silence, window past the soft threshold."""
+
+    def test_a_running_job_holds_the_cleanup_off(self):
+        assert watch.should_act(35, threshold=30, quiet_for=600, busy=True, hard=75) is False
+
+    def test_the_same_moment_acts_once_the_job_is_gone(self):
+        assert watch.should_act(35, threshold=30, quiet_for=600, busy=False, hard=75) is True
+
+    def test_waiting_is_bounded_by_the_hard_threshold(self):
+        """NEGATIVE: a job that never exits must not silence the watcher for
+        good — past the hard fill the window is worth more than the wait."""
+        assert watch.should_act(80, threshold=30, quiet_for=600, busy=True, hard=75) is True
+
+    def test_a_live_conversation_still_wins_over_everything(self):
+        """Busy or not, a person typing is never interrupted."""
+        assert watch.should_act(80, threshold=30, quiet_for=5, busy=False, hard=75) is False
+
+    def test_descendants_are_found_through_intermediate_shells(self):
+        """`chat -> shell -> python`: a direct-children check would call this quiet."""
+        table = {100: (1, "claude.exe"), 200: (100, "bash.exe"), 300: (200, "python.exe")}
+
+        assert presence.descendants(100, table) == {200, 300}
+
+    def test_the_mechanism_is_not_its_own_background_work(self, project_dir):
+        """The watcher and the overlay hang off the same chat and outlive every
+        turn. Counted as work, they would mean the window is never cleaned."""
+        table = {100: (1, "claude.exe"), 200: (100, "python.exe"), 300: (100, "python.exe")}
+        presence.register_own(str(project_dir), 200)
+
+        assert presence.background_pids(100, table, presence.own_pids(str(project_dir))) == {300}
+
+    def test_what_came_up_with_the_chat_is_not_work(self):
+        """Measured on a live chat: 43 descendants, every MCP server aged
+        exactly as the chat itself (143 min), one background command aged 0.
+        Counting the furniture as work means the window is never cleaned."""
+        table = {100: (1, "claude.exe"), 200: (100, "serena.exe"), 300: (100, "python.exe")}
+        ages = {100: 1000.0, 200: 1001.0, 300: 1500.0}  # server with the chat, job later
+
+        work = presence.background_pids(100, table, age_of=ages.get, grace=120)
+
+        assert work == {300}
+
+    def test_an_unreadable_age_does_not_block_the_cleanup(self):
+        """A process that cannot be asked is not proven to be work — blocking
+        forever on something unreadable is the worse failure."""
+        table = {100: (1, "claude.exe"), 200: (100, "python.exe")}
+        ages = {100: 1000.0}  # 200 answers None
+
+        assert presence.background_pids(100, table, age_of=ages.get, grace=120) == set()
+
+    def test_an_unknown_chat_age_counts_everything(self):
+        """The other direction of the same caution: with no baseline to compare
+        against, the watcher waits rather than cleans."""
+        table = {100: (1, "claude.exe"), 200: (100, "python.exe")}
+
+        assert presence.background_pids(100, table, age_of=lambda _pid: None) == {200}
+
+    def test_a_dead_registration_does_not_linger(self, project_dir):
+        """NEGATIVE: a registry that only grows would eventually name a recycled
+        pid and hide real work behind it."""
+        presence.register_own(str(project_dir), 200)
+        presence.register_own(str(project_dir), 300)
+
+        alive = presence.own_pids(str(project_dir), is_alive=lambda pid: pid == 300)
+
+        assert alive == {300}
+
+    def test_an_unwritable_registry_is_not_fatal(self, project_dir):
+        """A registry that cannot be read answers "nothing of ours" rather than
+        raising: a delayed cleanup beats a dead watcher."""
+        (project_dir / ".tausik" / ".autoloop-own.json").write_text("{не json", encoding="utf-8")
+
+        assert presence.own_pids(str(project_dir)) == set()
+
+
 def test_an_unknown_quiet_never_acts():
     """AC negative: the full window is real, the empty room is a guess."""
     assert watch.should_act(99, threshold=30, quiet_for=None) is False

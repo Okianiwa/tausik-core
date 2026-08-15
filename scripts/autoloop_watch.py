@@ -25,8 +25,15 @@ from typing import IO
 
 import autoloop_keys as keys
 from autoloop_limits import session_spent, status_text  # noqa: F401 — status_text: tests
-from autoloop_presence import idle_seconds, transcript_path, transcript_size
-from tausik_utils import tausik_config_path
+from autoloop_presence import (
+    background_pids,
+    idle_seconds,
+    own_pids,
+    register_own,
+    transcript_path,
+    transcript_size,
+)
+from autoloop.state import load_config
 from autoloop_chat_cycle import (
     ARM_SECONDS,
     DELIVERY_ATTEMPTS,
@@ -87,13 +94,23 @@ def reading(project_dir: str, max_age=MAX_READING_AGE, now=None):
     return newest
 
 
-def should_act(percent, threshold, quiet_for, idle_needed=IDLE_SECONDS) -> bool:
-    """Full window AND provably nobody typing. Either alone is not enough:
-    acting on a live conversation wipes it mid-sentence, and acting without a
-    measurement is acting blind. Not knowing counts as a live conversation."""
+def should_act(
+    percent, threshold, quiet_for, idle_needed=IDLE_SECONDS, busy=False, hard=None
+) -> bool:
+    """Full window AND provably nobody typing AND no work still running.
+
+    A quiet transcript means the TURN ended, not the work: an agent waiting on
+    a test run it started writes nothing for minutes, and the cleanup landed in
+    the middle of it. Not knowing counts as a person present; waiting on work is
+    bounded by `hard`, or a job that never exits would silence this for good.
+    """
     if quiet_for is None:
         return False
-    return needs_maintenance(percent, threshold) and quiet_for >= idle_needed
+    if not (needs_maintenance(percent, threshold) and quiet_for >= idle_needed):
+        return False
+    if busy and (hard is None or percent is None or percent < hard):
+        return False
+    return True
 
 
 def chat_pid(exclude=()) -> int | None:
@@ -241,12 +258,15 @@ def watch(
         release_lock(project_dir)
         return 0
 
-    threshold = threshold if threshold is not None else soft_threshold(project_dir)
+    config = load_config(project_dir)
+    threshold = threshold if threshold is not None else config["soft_threshold"]
     cycle = Maintenance(threshold=threshold)
+    register_own(project_dir)  # a descendant of the chat: else it waits for itself
     log(project_dir, f"старт: pid={pid}, порог {threshold}%")
     clear_ready(project_dir)
 
     blind, armed_screen = False, None
+    busy, busy_since = False, None
     try:
         while alive(pid):
             # The human said stop. Nothing to signal and no PID to get wrong:
@@ -260,7 +280,20 @@ def watch(
             path = transcript_path(project_dir, transcript)
             quiet = idle_seconds(path)
             now = time.monotonic()
-
+            # From the process tree, not a marker: a stuck marker here would
+            # mean no cleanup ever. Own processes excluded by registry.
+            own = own_pids(project_dir, keys.pid_exists)
+            working = background_pids(pid, keys.process_table(), own)
+            if bool(working) != busy:
+                busy = bool(working)
+                log(project_dir, f"фоновая работа: {len(working)} процессов, уборка ждёт"
+                    if busy else "фоновая работа кончилась, отсчёт тишины заново")
+            if busy:
+                busy_since = now
+            elif busy_since is not None and quiet is not None:
+                # The transcript stood still for the whole job; counting that as
+                # quiet would clean the moment it exits, before the result is read.
+                quiet = min(quiet, now - busy_since)
             # Said once, and again only when it changes. This is the state in
             # which the watcher does nothing at all, and a watcher that does
             # nothing silently is indistinguishable from a working one.
@@ -274,7 +307,9 @@ def watch(
                     else "транскрипт снова читается — наблюдение восстановлено",
                 )
 
-            if should_act(percent, threshold, quiet) and cycle.consider(percent, now):
+            if should_act(
+                percent, threshold, quiet, busy=busy, hard=config["hard_threshold"]
+            ) and cycle.consider(percent, now):
                 armed_screen = keys.console_text(pid)
                 log(
                     project_dir,
@@ -304,12 +339,6 @@ def watch(
     return 0
 
 
-def soft_threshold(project_dir: str, default=30):
-    try:
-        with open(tausik_config_path(project_dir), encoding="utf-8") as f:
-            return json.load(f).get("autoloop", {}).get("soft_threshold", default)
-    except (OSError, ValueError, AttributeError):
-        return default
 
 
 def spawn(project_dir: str, pid: int, transcript: str | None = None) -> None:

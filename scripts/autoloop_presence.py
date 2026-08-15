@@ -16,11 +16,16 @@ Two rules, both learned from a live incident:
 from __future__ import annotations
 
 import glob
+import json
 import os
 import re
 import time
 
 SESSION_FILE = os.path.join(".tausik", ".chat.session")
+# Where the mechanism's own processes announce themselves, so they are not
+# mistaken for the agent's background work. A registry rather than a name
+# check: `python overlay` and `python -m pytest` are the same executable.
+OWN_FILE = os.path.join(".tausik", ".autoloop-own.json")
 NOT_SLUG = re.compile(r"[^A-Za-z0-9]")
 
 
@@ -115,3 +120,128 @@ def idle_seconds(path, now=None):
         return max(0.0, now - os.path.getmtime(path))
     except OSError:
         return None
+
+
+def register_own(project_dir: str, pid: int | None = None) -> None:
+    """Announce a process as part of the mechanism. Never raises: a registry
+    that cannot be written costs a delayed cleanup, not a broken run."""
+    pid = os.getpid() if pid is None else pid
+    path = os.path.join(project_dir, OWN_FILE)
+    known = _read_own(path)
+    known.add(int(pid))
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(sorted(known), f)
+    except OSError:
+        pass
+
+
+def _read_own(path: str) -> set[int]:
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return set()
+    return {int(p) for p in data if isinstance(p, int)} if isinstance(data, list) else set()
+
+
+def own_pids(project_dir: str, is_alive=None) -> set[int]:
+    """The mechanism's live processes.
+
+    Dead entries are dropped on read rather than trusted: a registry that only
+    ever grows would eventually name a recycled pid and silence the watcher for
+    good — the failure mode that is worse than the one this exists to fix.
+    """
+    known = _read_own(os.path.join(project_dir, OWN_FILE))
+    if is_alive is None:
+        return known
+    return {pid for pid in known if is_alive(pid)}
+
+
+def descendants(pid: int, table: dict) -> set[int]:
+    """Every process under `pid`, however deep, from one snapshot.
+
+    Depth matters: a background command is `chat -> shell -> python`, and a
+    check that looked only at direct children would call that quiet.
+    """
+    children: dict[int, list[int]] = {}
+    for child, entry in table.items():
+        parent = entry[0] if isinstance(entry, (tuple, list)) else entry
+        children.setdefault(parent, []).append(child)
+    seen: set[int] = set()
+    queue = list(children.get(pid, ()))
+    while queue:
+        current = queue.pop()
+        if current in seen or current == pid:
+            continue
+        seen.add(current)
+        queue.extend(children.get(current, ()))
+    return seen
+
+
+def started_at(pid: int) -> float | None:
+    """Unix time this process started, or None when it cannot be asked."""
+    try:
+        import ctypes
+        import ctypes.wintypes as wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x1000, False, int(pid))  # QUERY_LIMITED_INFORMATION
+        if not handle:
+            return None
+        try:
+            created, exited, kern, user = (wintypes.FILETIME() for _ in range(4))
+            if not kernel32.GetProcessTimes(
+                handle, *(ctypes.byref(t) for t in (created, exited, kern, user))
+            ):
+                return None
+            ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime
+            return ticks / 1e7 - 11644473600  # 100ns since 1601 -> unix seconds
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:  # noqa: BLE001 — an unaskable process is "not proven new"
+        return None
+
+
+# A process that came up with the chat is part of its furniture, not its work.
+BOOT_GRACE_SECONDS = 120.0
+
+
+def background_pids(
+    chat_pid: int | None,
+    table: dict,
+    own: set[int] | None = None,
+    age_of=None,
+    grace: float = BOOT_GRACE_SECONDS,
+) -> set[int]:
+    """Work the agent STARTED, as opposed to everything hanging off the chat.
+
+    Two exclusions, both learned by measuring a real chat rather than guessing:
+
+    * the mechanism's own processes — watcher, overlay, dashboard — by
+      REGISTERED pid, because a name check cannot tell `python overlay` from
+      `python -m pytest`;
+    * everything that came up with the chat itself. A live chat here had 43
+      descendants: every MCP server, all aged exactly as the chat (143 min),
+      against a background command aged 0. Counting those as work would mean
+      the window is never quiet and never cleaned — worse than the defect this
+      answers.
+
+    A process whose start time cannot be read is NOT counted as work: the
+    conservative direction here is to let a cleanup happen, not to block it
+    forever on something unreadable.
+    """
+    if not chat_pid:
+        return set()
+    kids = descendants(chat_pid, table) - (own or set())
+    age_of = started_at if age_of is None else age_of
+    chat_started = age_of(chat_pid)
+    if chat_started is None:
+        return kids  # unknown chat age: fall back to "everything under it counts"
+    fresh = set()
+    for pid in kids:
+        born = age_of(pid)
+        if born is not None and born > chat_started + grace:
+            fresh.add(pid)
+    return fresh
