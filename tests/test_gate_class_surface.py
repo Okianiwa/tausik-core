@@ -177,6 +177,67 @@ def test_repo_root_resolves_the_same_from_the_deployed_copy():
     assert mod.run_class_surface_gate({"max_public_members": 60}, [])[0] is True
 
 
+def _deployed_module(scripts_dir):
+    """Load the gate the way a project runs it: from its own `.claude/scripts`."""
+    import importlib.util
+    import shutil
+
+    for name in ("gate_class_surface.py", "gate_filesize.py"):
+        shutil.copy(os.path.join(_REPO, "scripts", name), os.path.join(scripts_dir, name))
+    spec = importlib.util.spec_from_file_location(
+        "gcs_deployed_tmp", os.path.join(scripts_dir, "gate_class_surface.py")
+    )
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _deployed_project(tmp_path):
+    """A deployed project that is NOT a git repository: `.claude/` with a
+    scripts/ and harness/ mirror, and no source tree of its own."""
+    scripts = tmp_path / "proj" / ".claude" / "scripts"
+    scripts.mkdir(parents=True)
+    (tmp_path / "proj" / ".claude" / "harness").mkdir()
+    return tmp_path / "proj", scripts
+
+
+def test_a_deployed_copy_outside_a_repo_resolves_to_the_project_root(tmp_path):
+    """A deployed project need not be a repository — `tausik init` does not run
+    `git init`. Without a `.git` to anchor on, the fallback accepted `.claude/`
+    itself (it carries a harness/ mirror), so the gate measured the LIBRARY
+    MIRROR with no baseline in reach and turned red on the two classes the
+    baseline exists to hold — blocking every `task done` in the project."""
+    proj, scripts = _deployed_project(tmp_path)
+    mod = _deployed_module(str(scripts))
+    assert os.path.normcase(mod._repo_root()) == os.path.normcase(str(proj))
+
+
+def test_a_deployed_copy_does_not_measure_the_library_mirror(tmp_path):
+    """NEGATIVE: the mirror is a byte-copy of the library, not the project's
+    code. Measuring it reports the library's debt as the project's, and no
+    edit in the project can ever make it green."""
+    proj, scripts = _deployed_project(tmp_path)
+    (scripts / "god.py").write_text(
+        "class Mirror:\n" + "".join(f"    def m{i}(self): pass\n" for i in range(61)),
+        encoding="utf-8",
+    )
+    mod = _deployed_module(str(scripts))
+    ok, msg = mod.run_class_surface_gate({"max_public_members": 60}, [])
+    assert ok, msg
+    assert "Mirror" not in msg
+    assert not (proj / ".claude" / "tausik").exists(), "the fix must not plant files in the mirror"
+
+
+def test_a_deployed_copy_inside_a_repo_still_anchors_on_git(tmp_path):
+    """NEGATIVE: the project-root fallback must not override `.git`. A project
+    that IS a repository keeps measuring its own source tree."""
+    proj, scripts = _deployed_project(tmp_path)
+    (proj / ".git").mkdir()
+    mod = _deployed_module(str(scripts))
+    assert os.path.normcase(mod._repo_root()) == os.path.normcase(str(proj))
+
+
 def test_baselined_class_fails_when_it_grows(monkeypatch):
     """The ratchet only turns down: a baselined class that GROWS is a regression."""
     monkeypatch.setattr(gcs, "_load_config", lambda: {"baseline": {"Big": 100}})

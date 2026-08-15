@@ -39,6 +39,10 @@ DEFAULT_MAX_PUBLIC_MEMBERS = 60
 # violation six times and let a fix "pass" while the source stayed broken.
 SCAN_ROOTS = ("scripts", "harness", "bootstrap")
 
+# The same mirrors, as directory names: a gate RUNNING from one of them must
+# resolve the root above it, not the mirror it happens to live in.
+_DEPLOY_DIRS = frozenset({".claude", ".cursor", ".kilo", ".opencode", ".qwen"})
+
 _SKIP_DIRS = frozenset(
     {
         ".git",
@@ -211,9 +215,19 @@ def _repo_root() -> str:
         if parent == d:
             break
         d = parent
-    # No .git (tarball export, vendored copy): fall back to the nearest ancestor
-    # that actually carries a source tree, then to this file's parent.
+    # No .git (tarball export, vendored copy, a project `tausik init` never made
+    # a repository): fall back to the nearest ancestor that carries a source
+    # tree, then to this file's parent.
+    #
+    # An IDE mirror is checked FIRST and never accepted as the root, even though
+    # it does carry a `harness/`: it is a byte-copy of the library, so measuring
+    # it reports the LIBRARY's debt as the project's — with no `tausik/gates.json`
+    # beside it, the ratchet baseline is out of reach and the two baselined
+    # classes fail every close, in a project where no edit could ever make them
+    # green. The project root is the mirror's parent.
     for candidate in (os.path.dirname(here), os.path.dirname(os.path.dirname(here))):
+        if os.path.basename(candidate) in _DEPLOY_DIRS:
+            return os.path.dirname(candidate)
         if os.path.isdir(os.path.join(candidate, "harness")):
             return candidate
     return os.path.dirname(here)
