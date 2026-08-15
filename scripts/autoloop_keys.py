@@ -383,15 +383,12 @@ def find_chat_pids() -> list[int]:
 
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
-        print("использование: autoloop_keys.py <pid> <текст>")
-        print(f"запущенные чаты: {find_chat_pids()}")
+        print(f"использование: autoloop_keys.py <pid> <текст>\nзапущенные чаты: {find_chat_pids()}")
         return 0
-    try:
-        pid = int(argv[0])
-    except ValueError:
+    if not argv[0].isdigit():  # send_to_console takes an int; argv is text
         print(f"не pid: {argv[0]!r}")
         return 2
-    text = " ".join(argv[1:])
+    pid, text = int(argv[0]), " ".join(argv[1:])
     sent, reason = send_to_console(pid, text)
     # Printed after the console is back: while attached, this would land in
     # the other window.
