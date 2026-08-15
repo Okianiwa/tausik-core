@@ -351,12 +351,48 @@ def format_cost(value: float | None) -> str:
     return "—" if value is None else f"${value:.2f}"
 
 
+def work_short(data: dict) -> str:
+    """The work metric on one short line, for the window where there is room
+    for exactly one.
+
+    In chat mode the journal belongs to an agents run, so tokens are never
+    measured — and the field kept for them printed `работа — тк`, which reads
+    as a line that got cut off rather than as "not measured". Cleanups are the
+    quantity that does exist in the chat: how many times the watcher emptied
+    the window.
+    """
+    if data.get("mode") == MODE_CHAT:
+        return f"уборок {max(0, int(data.get('iteration') or 0))}"
+    tokens = data["tokens"]
+    return f"работа {journal.format_tokens(journal.work_tokens(tokens))} тк"
+
+
+def work_full(data: dict) -> tuple[str, str, str]:
+    """The same metric for screens with a whole line to spend: label, figure
+    and the aside that explains it.
+
+    Returned in parts because the two screens paint it differently — one in
+    rich markup, one in plain text — and the choice of WHAT to show must not
+    be made twice. The aside is empty in chat mode: elapsed time already has
+    its own line there, and repeating it would be filler, not information.
+    """
+    if data.get("mode") == MODE_CHAT:
+        return ("уборок", str(max(0, int(data.get("iteration") or 0))), "")
+    tokens = data["tokens"]
+    return (
+        "работа",
+        f"{journal.format_tokens(journal.work_tokens(tokens))} за прогон",
+        f"выход {journal.format_tokens(tokens['output'])}"
+        f" · запись кэша {journal.format_tokens(tokens['cache_write'])}",
+    )
+
+
 def render_text(data: dict) -> str:
     """Plain-text rendering — used by tests and as the fallback when textual
     is unavailable or the output is not a terminal."""
-    tokens = data["tokens"]
     done, active = len(data["tasks_done"]), len(data["tasks_active"])
     total = data["tasks_total"]
+    work_label, work_value, work_aside = work_full(data)
     lines = [
         cat_frame(data["status"], 0),
         f"autoloop · {data['caption']}",
@@ -365,9 +401,7 @@ def render_text(data: dict) -> str:
         f"контекст  {bar((data['percent'] or 0) / 100)}  {format_percent(data['percent'])}"
         f"{format_reading_age(data.get('reading_age_seconds'))}"
         f"  (порог {int(data['soft_threshold'])}%)",
-        f"работа    {journal.format_tokens(journal.work_tokens(tokens))} за прогон"
-        f"  (выход {journal.format_tokens(tokens['output'])}"
-        f" · запись кэша {journal.format_tokens(tokens['cache_write'])})",
+        f"{work_label:<9} {work_value}" + (f"  ({work_aside})" if work_aside else ""),
         f"время     {format_elapsed(data['elapsed_seconds'])} · {format_cost(data['cost_usd'])}",
     ]
     if data["tasks_queued"]:

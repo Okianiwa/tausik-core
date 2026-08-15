@@ -21,7 +21,6 @@ import time
 
 import autoloop_quips as quips
 import autoloop_tui as tui
-from autoloop_journal import format_tokens, work_tokens
 from tausik_utils import tausik_config_path
 
 REFRESH_MS = 1000
@@ -96,11 +95,12 @@ def overlay_lines(data: dict) -> list[str]:
     """The three text lines beside the cat. Pure, so tests can read them.
 
     The two numbers on the last line answer different questions and have to
-    say so: `ctx` is how full the window is right now, `работа` is what the run
-    has produced since it started. Unlabelled and side by side they read as one
-    contradictory measurement — 40% next to millions of tokens.
+    say so: `ctx` is how full the window is right now, the metric beside it is
+    what the run has produced since it started. Unlabelled and side by side
+    they read as one contradictory measurement — 40% next to millions of
+    tokens. Which metric that is depends on the mode, and `tui.work_short`
+    decides — the window only paints what it is handed.
     """
-    tokens = data["tokens"]
     done, active = len(data["tasks_done"]), len(data["tasks_active"])
     total = data["tasks_total"]
     return [
@@ -109,7 +109,7 @@ def overlay_lines(data: dict) -> list[str]:
         f"{tui.progress_bar(done, active, total, 10)}"
         f" {tui.progress_label(done, active, total)}"
         f"   ctx {tui.format_percent(data['percent'])}"
-        f"   работа {format_tokens(work_tokens(tokens))} тк",
+        f"   {tui.work_short(data)}",
     ]
 
 

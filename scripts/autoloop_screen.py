@@ -9,7 +9,6 @@ reaches it.
 
 from __future__ import annotations
 
-import autoloop_journal as journal
 import autoloop_tui as tui
 
 REFRESH_SECONDS = 1.0
@@ -77,11 +76,11 @@ def run_dashboard(project_dir: str, config: dict | None = None) -> int:
 
 
 def body_markup(data: dict) -> str:
-    tokens = data["tokens"]
     done, active = len(data["tasks_done"]), len(data["tasks_active"])
     total = data["tasks_total"]
     percent = data["percent"]
     over = percent is not None and percent >= data["soft_threshold"]
+    work_label, work_value, work_aside = tui.work_full(data)
     return (
         f"[b]autoloop[/b] · {data['caption']}"
         f"{'  · итерация ' + str(data['iteration']) if data['iteration'] else ''}\n"
@@ -91,9 +90,8 @@ def body_markup(data: dict) -> str:
         f"[dim]контекст[/dim] {'[yellow]' if over else ''}{tui.bar((percent or 0) / 100)}"
         f"  {tui.format_percent(percent)}{'[/yellow]' if over else ''}"
         f" [dim](порог {int(data['soft_threshold'])}%)[/dim]\n"
-        f"[dim]работа[/dim]   [b]{journal.format_tokens(journal.work_tokens(tokens))}[/b]"
-        f" [dim]за прогон · выход {journal.format_tokens(tokens['output'])}"
-        f" · запись кэша {journal.format_tokens(tokens['cache_write'])}[/dim]\n"
+        f"[dim]{work_label}[/dim]{' ' * (9 - len(work_label))}[b]{work_value}[/b]"
+        f"{' [dim]· ' + work_aside + '[/dim]' if work_aside else ''}\n"
         f"[dim]время[/dim]    {tui.format_elapsed(data['elapsed_seconds'])}"
         f" [dim]· {tui.format_cost(data['cost_usd'])}[/dim]"
     )

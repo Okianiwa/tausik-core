@@ -565,6 +565,56 @@ class TestBothModesAreVisible:
         assert "—" in text
 
 
+class TestTheWorkMetricFitsItsMode:
+    """Every view kept a field for tokens in the one mode where tokens are
+    never measured, and printed «работа — тк» into it. A dash with a unit
+    after it reads as a line that got cut off, not as "not measured"."""
+
+    def test_the_chat_counts_cleanups_instead_of_tokens(self, project_dir):
+        declare_chat_run(project_dir)
+        log_cleanups(project_dir, 2)
+
+        assert tui.work_short(collect(str(project_dir))) == "уборок 2"
+
+    def test_agents_keep_their_token_count(self, project_dir):
+        """AC negative: showing something sane in the chat must not cost the
+        agents run its report."""
+        mark_running(project_dir)
+        make_entry(project_dir, tokens={"output": 500, "cache_write": 8_000})
+
+        assert tui.work_short(collect(str(project_dir))) == "работа 8.5k тк"
+
+    def test_no_view_prints_a_dash_where_a_figure_was_promised(self, project_dir):
+        """The defect itself, checked in all three views at once."""
+        import autoloop_screen as screen
+        from autoloop_overlay import overlay_lines
+
+        declare_chat_run(project_dir)
+        log_cleanups(project_dir, 1)
+        make_entry(project_dir, tokens={"output": 30, "cache_write": 10})
+        data = collect(str(project_dir))
+
+        assert "работа — тк" not in overlay_lines(data)[2]
+        assert "уборок 1" in overlay_lines(data)[2]
+        for rendering in (render_text(data), screen.body_markup(data)):
+            assert "за прогон" not in rendering
+            assert "запись кэша" not in rendering
+            assert "уборок" in rendering
+
+    def test_the_views_do_not_pick_the_metric_themselves(self):
+        """AC: one builder, three consumers. Three copies of the choice drift,
+        and the one that drifts is the screen nobody is looking at."""
+        import inspect
+
+        import autoloop_overlay as overlay
+        import autoloop_screen as screen
+
+        for module in (screen, overlay):
+            source = inspect.getsource(module)
+            assert "work_tokens(" not in source, f"{module.__name__} выбирает метрику сам"
+            assert "format_tokens(" not in source
+
+
 # --- the fill is read now, not when the last turn ended --------------------
 
 
