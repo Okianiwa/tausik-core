@@ -352,39 +352,25 @@ def format_cost(value: float | None) -> str:
 
 
 def work_short(data: dict) -> str:
-    """The work metric on one short line, for the window where there is room
-    for exactly one.
-
-    In chat mode the journal belongs to an agents run, so tokens are never
-    measured — and the field kept for them printed `работа — тк`, which reads
-    as a line that got cut off rather than as "not measured". Cleanups are the
-    quantity that does exist in the chat: how many times the watcher emptied
-    the window.
-    """
+    """The work metric for the window, which has room for exactly one. Chat
+    tokens are never measured — the journal describes an agents run — and the
+    field kept for them printed `работа — тк`, which reads as a line cut off,
+    not as "not measured". Cleanups are what the chat does have."""
     if data.get("mode") == MODE_CHAT:
         return f"уборок {max(0, int(data.get('iteration') or 0))}"
-    tokens = data["tokens"]
-    return f"работа {journal.format_tokens(journal.work_tokens(tokens))} тк"
+    return f"работа {journal.format_tokens(journal.work_tokens(data['tokens']))} тк"
 
 
 def work_full(data: dict) -> tuple[str, str, str]:
-    """The same metric for screens with a whole line to spend: label, figure
-    and the aside that explains it.
-
-    Returned in parts because the two screens paint it differently — one in
-    rich markup, one in plain text — and the choice of WHAT to show must not
-    be made twice. The aside is empty in chat mode: elapsed time already has
-    its own line there, and repeating it would be filler, not information.
-    """
+    """The same metric where a whole line can be spent: label, figure, aside.
+    In parts because the two screens paint it differently, and the choice of
+    WHAT to show must not be made twice. No aside in chat mode: elapsed time
+    already has its own line."""
     if data.get("mode") == MODE_CHAT:
         return ("уборок", str(max(0, int(data.get("iteration") or 0))), "")
-    tokens = data["tokens"]
-    return (
-        "работа",
-        f"{journal.format_tokens(journal.work_tokens(tokens))} за прогон",
-        f"выход {journal.format_tokens(tokens['output'])}"
-        f" · запись кэша {journal.format_tokens(tokens['cache_write'])}",
-    )
+    tokens, fmt = data["tokens"], journal.format_tokens
+    aside = f"выход {fmt(tokens['output'])} · запись кэша {fmt(tokens['cache_write'])}"
+    return "работа", f"{fmt(journal.work_tokens(tokens))} за прогон", aside
 
 
 def render_text(data: dict) -> str:
