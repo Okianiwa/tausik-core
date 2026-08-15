@@ -25,6 +25,31 @@ CROSSCUTTING_SCOPE = ["scripts/", "harness/", "bootstrap/"]
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _scripts_dir() -> str:
+    """Hub layout keeps the gates in `scripts/`; a deployed project has them
+    under `.claude/scripts/`. The project's flat copy of this file runs there."""
+    for rel in (("scripts",), (".claude", "scripts")):
+        candidate = os.path.join(_REPO, *rel)
+        if os.path.isdir(candidate):
+            return candidate
+    return os.path.join(_REPO, "scripts")
+
+
+_SCRIPTS = _scripts_dir()
+
+
+def _committed_gates(section: str) -> dict:
+    """A section of the committed `tausik/gates.json`, or {} where it does not
+    ship. The deployed tree carries the GATES but not their committed config —
+    the cases that pin the config's content simply have nothing to pin there,
+    and say so with a skip instead of failing for a file's absence."""
+    path = os.path.join(_REPO, "tausik", "gates.json")
+    if not os.path.isfile(path):
+        return {}
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh).get(section) or {}
+
+
 def _tree(tmp_path, files: dict[str, str]) -> str:
     """Write {relative path: source} under tmp_path/scripts and return the root."""
     for rel, src in files.items():
@@ -183,7 +208,7 @@ def _deployed_module(scripts_dir):
     import shutil
 
     for name in ("gate_class_surface.py", "gate_filesize.py"):
-        shutil.copy(os.path.join(_REPO, "scripts", name), os.path.join(scripts_dir, name))
+        shutil.copy(os.path.join(_SCRIPTS, name), os.path.join(scripts_dir, name))
     spec = importlib.util.spec_from_file_location(
         "gcs_deployed_tmp", os.path.join(scripts_dir, "gate_class_surface.py")
     )
@@ -258,8 +283,9 @@ def test_new_god_class_is_blocked_outright_not_baselined(monkeypatch):
 
 def test_committed_baseline_matches_reality_and_only_ratchets_down():
     """A baseline larger than the truth is a licence to grow back up to it."""
-    with open(os.path.join(_REPO, "tausik", "gates.json"), encoding="utf-8") as fh:
-        baseline = json.load(fh)["class_surface"]["baseline"]
+    baseline = _committed_gates("class_surface").get("baseline")
+    if not baseline:
+        pytest.skip("no committed tausik/gates.json in this tree (deployed copy)")
     ranked, _errors, _amb = gcs.measure()
     actual = {name: size for name, size, _p in ranked}
     for name, allowed in baseline.items():
@@ -293,8 +319,7 @@ def test_oversized_non_dispatch_file_under_mcp_is_caught(tmp_path):
 
 
 def _committed_filesize_config() -> dict:
-    with open(os.path.join(_REPO, "tausik", "gates.json"), encoding="utf-8") as fh:
-        return json.load(fh)["filesize"]
+    return _committed_gates("filesize")
 
 
 # Derived from the registry, NOT restated here (convention #339). A hardcoded
@@ -323,5 +348,7 @@ def test_no_reason_documents_an_exemption_that_no_longer_exists():
     which is the whole point of requiring reasons in the first place.
     """
     cfg = _committed_filesize_config()
+    if not cfg:
+        pytest.skip("no committed tausik/gates.json in this tree (deployed copy)")
     orphaned = sorted(set(cfg["_exempt_files_reasons"]) - set(cfg.get("exempt_files") or []))
     assert not orphaned, f"reason kept for a file that is no longer exempt: {orphaned}"
