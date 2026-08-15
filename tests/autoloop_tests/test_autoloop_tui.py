@@ -305,6 +305,52 @@ def test_segments_never_outgrow_a_narrow_bar(width):
     assert tui.CELL_ACTIVE in strip  # what is running survives the squeeze
 
 
+def test_the_old_names_still_answer_from_autoloop_tui():
+    """The split moved the formatters into `autoloop_format`, and the screen,
+    the overlay and every test reach them through `tui.`. Re-export is what
+    makes a file split invisible to the callers; without it this would have
+    been one change in four modules instead of one."""
+    import autoloop_format as fmt
+
+    for name in ("progress_bar", "progress_label", "render_text", "cat_frame", "bar"):
+        assert getattr(tui, name) is getattr(fmt, name), name
+    assert (tui.CELL_DONE, tui.CELL_ACTIVE, tui.CELL_QUEUED) == (
+        fmt.CELL_DONE,
+        fmt.CELL_ACTIVE,
+        fmt.CELL_QUEUED,
+    )
+
+
+def test_the_split_left_exactly_one_implementation():
+    """NEGATIVE: a split that COPIES instead of moving is worse than no split —
+    two bars drift, and the one that drifts is the one nobody is looking at."""
+    import inspect
+
+    import autoloop_format as fmt
+    import autoloop_overlay as overlay
+    import autoloop_screen as screen
+
+    authors = [
+        module.__name__
+        for module in (tui, fmt, screen, overlay)
+        if "def progress_bar" in inspect.getsource(module)
+    ]
+    assert authors == ["autoloop_format"], authors
+
+
+def test_both_halves_stay_under_the_filesize_gate():
+    """The split exists because the module reached 397 lines against a blocking
+    cap of 400 — the next edit would have been refused at `task done`. A split
+    that leaves either half at the edge buys nothing."""
+    import inspect
+
+    import autoloop_format as fmt
+
+    for module in (tui, fmt):
+        lines = len(inspect.getsource(module).splitlines())
+        assert lines < 400, f"{module.__name__}: {lines} строк"
+
+
 def test_dashboard_and_overlay_share_one_bar():
     """AC: one implementation. Two of them drift, and the one that drifts is
     the one nobody happens to be looking at."""
