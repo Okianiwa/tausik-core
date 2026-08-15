@@ -70,8 +70,13 @@ def _project_has_key(svc: Any) -> bool:
     )
 
 
-def _emit_receipt(svc: Any, run_id: int | None) -> None:
-    """Report whether the run produced a signed receipt.
+def _emit_receipt(svc: Any, run_id: int | None) -> bool:
+    """Report whether the run produced a signed receipt, and say which.
+
+    The return value is not decoration: `--verify-handle` is validated against
+    this exact receipt, so a run without one cannot be closed with a handle.
+    Reading the receipt once and handing the answer on keeps the advice printed
+    below from contradicting the validator two commands later.
 
     l26-signing-key-boundary: a signing FAILURE (a project key exists but the
     receipt could not be signed) previously printed the SAME "no project key"
@@ -85,12 +90,12 @@ def _emit_receipt(svc: Any, run_id: int | None) -> None:
 
     if run_id is None:
         print("Receipt: not emitted — the run was not recorded (see .tausik/tausik.log).")
-        return
+        return False
     stored = load_receipt(svc.be._conn, run_id=run_id)
     if stored is not None:
         sig = stored["envelope"].get("signature") or {}
         print(f"Receipt: signed (run #{run_id}, key {sig.get('key_fingerprint', '?')}).")
-        return
+        return True
     # No stored receipt. A configured-but-failing key is silent degradation
     # (the defect this task closes); a genuinely absent key is benign opt-out.
     if _project_has_key(svc):
@@ -110,8 +115,9 @@ def _emit_receipt(svc: Any, run_id: int | None) -> None:
             )
         except Exception:  # noqa: BLE001 — best-effort telemetry, never blocks
             pass
-        return
+        return False
     print("Receipt: not emitted — no project key (`tausik key init` to enable signed receipts).")
+    return False
 
 
 def cmd_verify(svc: Any, args: Any) -> None:
@@ -225,14 +231,19 @@ def cmd_verify(svc: Any, args: Any) -> None:
             f"(task_slug={task_slug or '-'}, exit={'0' if passed else '1'})."
         )
     if task_slug:
-        _emit_receipt(svc, run_id)
-        _emit_handle(report, task_slug)
+        signed = _emit_receipt(svc, run_id)
+        _emit_handle(report, task_slug, signed=signed)
     if not passed:
         raise SystemExit(1)
 
 
-def _emit_handle(report: dict[str, Any], task_slug: str) -> None:
+def _emit_handle(report: dict[str, Any], task_slug: str, *, signed: bool = False) -> None:
     """Print the explicit state handle, or say why there is none.
+
+    `signed` is the receipt fact read once by `_emit_receipt`. It decides which
+    closing command is advised, and it must come from the same read the
+    validator uses — advice derived from anything else (key present, say) drifts
+    from what `task done --verify-handle` will actually accept.
 
     Printing it is not cosmetic — it IS the feature. SEP-2567's whole point is
     that the identifier is returned to the caller and passed back as an
@@ -254,6 +265,21 @@ def _emit_handle(report: dict[str, Any], task_slug: str) -> None:
             "(no declared files, all gates skipped, or a security-sensitive "
             f"scope). `task done {task_slug}` will fall back to the freshness "
             "lookup."
+        )
+        return
+    if not signed:
+        # The handle exists and is printed — it is real state, and hiding it
+        # would be the hidden-server-state failure again. What is withheld is
+        # the COMMAND, because `task done --verify-handle` validates against a
+        # signed receipt this run does not have and refuses within the second.
+        # An instruction the tool itself makes impossible costs the agent a
+        # closing attempt and reads as a broken gate.
+        print(
+            f"Verify handle: {handle}\n"
+            f"  valid until {report.get('handle_expires_at')} (single use), but this run "
+            "carries NO signed receipt, so --verify-handle would be refused.\n"
+            f"  Close with the freshness lookup: {_CLI} task done {task_slug} --ac-verified\n"
+            f"  To make handles usable here: {_CLI} key init"
         )
         return
     print(
