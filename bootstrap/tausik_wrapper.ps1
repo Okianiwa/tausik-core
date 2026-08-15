@@ -8,7 +8,13 @@
 # and the caller had no way to notice. PowerShell hands arguments to a native
 # executable as an array (@args), so the text survives intact.
 
-$ErrorActionPreference = 'Stop'
+# NOT 'Stop'. The CLI writes gate progress to stderr, and PowerShell 5.1 wraps
+# every stderr line of a native command in an ErrorRecord once that stream is
+# redirected. Under 'Stop' that is one interpretation away from aborting a call
+# that is merely being noisy. Measured, not assumed: the tests pin that a noisy
+# command completes and that a real non-zero exit still propagates - both hold
+# either way here, so this is a precaution, not the fix for a reproduced defect.
+$ErrorActionPreference = 'Continue'
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectDir = Split-Path -Parent $ScriptDir
 

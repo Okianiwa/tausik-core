@@ -22,7 +22,20 @@ import pytest
 pytestmark = pytest.mark.skipif(os.name != "nt", reason=".cmd и .ps1 — только Windows")
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_BOOTSTRAP = os.path.join(_REPO, "bootstrap")
+
+
+def _bootstrap_dir() -> str:
+    """Hub keeps the wrapper templates in `bootstrap/`; a deployed project has
+    them under `.tausik-lib/bootstrap/`. The flat project copy of this file runs
+    there, and the wrappers are exactly what it must be able to check."""
+    for rel in (("bootstrap",), (".tausik-lib", "bootstrap")):
+        candidate = os.path.join(_REPO, *rel)
+        if os.path.isdir(candidate):
+            return candidate
+    return os.path.join(_REPO, "bootstrap")
+
+
+_BOOTSTRAP = _bootstrap_dir()
 
 MULTILINE = "AC-1: первая строка\nAC-2: вторая строка"
 SINGLE = "AC-1: одна строка"
@@ -101,6 +114,64 @@ def test_a_single_line_argument_survives_both_wrappers(wrappers, tmp_path):
     иначе фикс многострочности стал бы регрессом для всего остального."""
     assert _via_powershell(wrappers, SINGLE, tmp_path)[-1] == SINGLE
     assert _via_cmd(wrappers, SINGLE, tmp_path)[-1] == SINGLE
+
+
+def _noisy(tmp_path, exit_code: int = 0):
+    """Замена project.py, которая ведёт себя как настоящий CLI: печатает в оба
+    потока (гейты пишут прогресс именно в stderr) и возвращает свой код."""
+    script = tmp_path / ".claude" / "scripts" / "project.py"
+    script.write_text(
+        "import sys\n"
+        "print('[gates] Running 7 gate(s)', file=sys.stderr)\n"
+        "print('DONE-MARKER')\n"
+        f"sys.exit({exit_code})\n",
+        encoding="utf-8",
+    )
+
+
+def _run_ps(tausik, tmp_path, *args):
+    """Запуск с `2>&1` ВНУТРИ PowerShell — именно так вызывает агентский
+    harness, и именно эта форма меняет поведение 5.1: перенаправленный поток
+    нативной команды заворачивается в ErrorRecord'ы. Родительское
+    перенаправление (capture_output у subprocess) этого не делает, поэтому
+    первая версия теста проходила и на сломанной обёртке."""
+    quoted = " ".join(f"'{a}'" for a in args)
+    return subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            f"& '{tausik / 'tausik.ps1'}' {quoted} 2>&1; exit $LASTEXITCODE",
+        ],
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=str(tmp_path),
+    )
+
+
+def test_progress_on_stderr_does_not_abort_the_call(wrappers, tmp_path):
+    """Дефект первой версии обёртки: под `$ErrorActionPreference='Stop'` первая
+    же строка прогресса гейтов становилась терминальной ошибкой, вызов обрывался
+    на середине — `task done` печатал гейты и не закрывал ничего."""
+    _noisy(tmp_path)
+
+    r = _run_ps(wrappers, tmp_path, "done", "slug")
+
+    assert "DONE-MARKER" in r.stdout, r.stderr[:300]
+    assert r.returncode == 0
+
+
+def test_the_exit_code_is_passed_through(wrappers, tmp_path):
+    """NEGATIVE: терпимость к stderr не должна превратиться в «всё хорошо» —
+    отказ CLI обязан остаться отказом."""
+    _noisy(tmp_path, exit_code=3)
+
+    assert _run_ps(wrappers, tmp_path, "done", "slug").returncode == 3
 
 
 def test_bootstrap_ships_all_three_wrappers(wrappers):
