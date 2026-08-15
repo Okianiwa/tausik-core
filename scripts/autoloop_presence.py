@@ -196,6 +196,57 @@ def own_pids(project_dir: str, is_alive=None) -> set[int]:
     return {pid for pid in known if is_alive(pid)}
 
 
+# One window per project — a second paints the same numbers over the first.
+# Kept apart from OWN_FILE on purpose: that registry answers "is this pid one
+# of ours", which the watcher and the dashboard also satisfy. This answers the
+# narrower question the supervisor actually asks before opening a window.
+OVERLAY_LOCK = os.path.join(".tausik", ".autoloop-overlay.lock")
+
+
+def overlay_owner(project_dir: str) -> int | None:
+    try:
+        with open(os.path.join(project_dir, OVERLAY_LOCK), encoding="utf-8") as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def overlay_is_open(project_dir: str, is_alive=None) -> bool:
+    """Is a window already up for this project?
+
+    By registered pid, never by process name: to the process table `python
+    overlay` and `python -m pytest` are the same executable, and a name check
+    would call a test run a window.
+    """
+    owner = overlay_owner(project_dir)
+    if not owner:
+        return False
+    if is_alive is None:
+        import autoloop_keys
+
+        is_alive = autoloop_keys.pid_exists
+    return bool(is_alive(owner))
+
+
+def claim_overlay(project_dir: str, pid: int | None = None) -> None:
+    """Never raises: a lock that cannot be written costs a second window some
+    day, while a traceback here costs the window that was opening."""
+    path = os.path.join(project_dir, OVERLAY_LOCK)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(str(os.getpid() if pid is None else int(pid)))
+    except OSError:
+        pass
+
+
+def release_overlay(project_dir: str) -> None:
+    try:
+        os.unlink(os.path.join(project_dir, OVERLAY_LOCK))
+    except OSError:
+        pass
+
+
 def descendants(pid: int, table: dict) -> set[int]:
     """Every process under `pid`, however deep, from one snapshot.
 

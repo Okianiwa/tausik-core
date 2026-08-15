@@ -20,6 +20,7 @@ import os
 import time
 from typing import Any
 
+import autoloop_presence as presence
 import autoloop_quips as quips
 import autoloop_tui as tui
 import autoloop_watch_state as wstate
@@ -378,8 +379,14 @@ def run_overlay(project_dir: str, config: dict | None = None) -> int:
 
     animate()  # before the first refresh: the cat's width sets the text column
     refresh()
+    # Claimed here rather than on entry: both returns above happen when there is
+    # no window, and a lock taken before them would tell every later supervisor
+    # that a window it cannot see is already up.
+    presence.claim_overlay(project_dir)
     try:
         root.mainloop()
     except KeyboardInterrupt:
         close()
+    finally:
+        presence.release_overlay(project_dir)
     return 0

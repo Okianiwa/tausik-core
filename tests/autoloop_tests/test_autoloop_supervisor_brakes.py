@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import autoloop_run as autoloop
+from autoloop import autonomy
 from autoloop_brakes import BrakeState, check_brakes, stop_switch_path
 
 
@@ -103,6 +104,56 @@ def test_kill_switch_stops_the_running_loop(loop_env, project_dir, monkeypatch, 
     assert code == 0
     assert len(loop_env["claude"]) == 2  # finished the current one, started no third
     assert "остановка по требованию" in capsys.readouterr().out
+
+
+def test_stale_stop_file_does_not_kill_the_new_run(loop_env, project_dir, capsys):
+    """A switch flipped at a run that has already ended is not an order for
+    this one. Before the fix the supervisor started, read it, stopped, and
+    exited 0 — indistinguishable from a run that simply had nothing to do.
+    """
+    stop_switch_path(project_dir).write_text("", encoding="utf-8")
+
+    code = run_loop(max_iterations=1)
+
+    assert len(loop_env["claude"]) == 1
+    assert code == autoloop.EXIT_STOPPED  # stopped by the cap, not by the switch
+    assert not stop_switch_path(project_dir).exists()
+    assert "снята метка остановки" in capsys.readouterr().out
+
+
+def test_unremovable_stop_file_refuses_the_run_rather_than_walking_into_it(
+    loop_env, project_dir, monkeypatch, capsys
+):
+    """AC negative: if the file will not go, starting anyway reproduces the
+    exact silent death the fix exists to remove. Refuse, say why, and leave no
+    run marker behind for the next supervisor to trip over.
+    """
+    stop_switch_path(project_dir).write_text("", encoding="utf-8")
+
+    def refuse(self, *args, **kwargs):
+        raise OSError("в доступе отказано")
+
+    monkeypatch.setattr(Path, "unlink", refuse)
+
+    code = run_loop(max_iterations=1)
+
+    assert code == autoloop.EXIT_STOPPED
+    assert loop_env["claude"] == []
+    assert "не снять" in capsys.readouterr().out
+    assert not Path(autonomy.run_marker_path(str(project_dir))).exists()
+
+
+def test_refusing_to_start_leaves_the_live_runs_switch_alone(loop_env, project_dir):
+    """AC negative: another run is going and its owner has already asked it to
+    stop. The supervisor that refuses to join must not take that request away
+    on its way out — clearing happens past both refusals, never before them.
+    """
+    autonomy.create_run_marker(str(project_dir), 999)
+    switch = stop_switch_path(project_dir)
+    switch.write_text("", encoding="utf-8")
+
+    assert run_loop(max_iterations=1) == autoloop.EXIT_STOPPED
+    assert switch.exists()
 
 
 # --- iteration cap --------------------------------------------------------

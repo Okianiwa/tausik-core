@@ -162,8 +162,43 @@ def report_session_closure(
     return True
 
 
+def spawn_overlay(project_dir: Path | str) -> str:
+    """Put the window up for a run nobody is sitting in front of.
+
+    Agents mode frees the chat and usually empties the chair with it, so the
+    window becomes the only place the run is visible at a glance. Detached the
+    way the watcher is, for the reason measured there: an unredirected child
+    keeps the parent's pipe open, and whoever started the run then hears
+    nothing from it until it dies.
+
+    The process is not kept: the run must neither wait on the window nor take
+    it down at the end — a cat that goes to sleep in the corner is the report.
+
+    Returns a message to log, or "" when a window is up or was already open.
+    """
+    import autoloop_presence as presence
+
+    if presence.overlay_is_open(str(project_dir)):
+        return ""
+    # Detached on Windows so the window is not taken down with the supervisor:
+    # it is meant to still be there, cat asleep, when the run has finished.
+    flags = (0x00000008 | 0x00000200) if os.name == "nt" else 0  # DETACHED | NEW_GROUP
+    try:
+        subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), "overlay"],
+            cwd=str(project_dir),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=flags,
+        )
+    except (OSError, ValueError) as e:
+        return str(e)
+    return ""
+
+
 def loop(args: argparse.Namespace) -> int:
-    from autoloop_brakes import BrakeState, check_brakes
+    from autoloop_brakes import BrakeState, check_brakes, clear_stop_switch
 
     project_dir = PROJECT_DIR
     config = load_config(str(project_dir))
@@ -202,6 +237,28 @@ def loop(args: argparse.Namespace) -> int:
     if not autonomy.create_run_marker(str(project_dir), os.getpid()):
         log("[autoloop] не удалось выставить метку прогона — прогон отменён")
         return EXIT_STOPPED
+
+    # Only now, past both refusals: a switch belonging to a run still going is
+    # somebody else's, and the refusal above must not clear it on the way out.
+    # Cleared once, here — clearing it per iteration would make the loop
+    # unstoppable, which is the opposite defect and a worse one.
+    cleared, error = clear_stop_switch(project_dir)
+    if error:
+        log(
+            f"[autoloop] метку остановки .tausik/.autoloop.stop не снять ({error}) — "
+            "прогон отменён: он всё равно встал бы на первой же проверке тормозов"
+        )
+        autonomy.remove_run_marker(str(project_dir))
+        return EXIT_STOPPED
+    if cleared:
+        log("[autoloop] снята метка остановки от прошлого прогона (.tausik/.autoloop.stop)")
+
+    # A window is a nicety, not a precondition. On a headless box there is no
+    # display and the run is just as valid, so trouble here is one line in the
+    # log — never a reason to refuse work nobody is watching anyway.
+    trouble = spawn_overlay(project_dir)
+    if trouble:
+        log(f"[autoloop] окно прогона не поднять ({trouble}) — прогон идёт без него")
 
     pruned = prune_state_files(str(project_dir))
     if pruned:

@@ -87,6 +87,27 @@ def stop_switch_path(project_dir: Path | str) -> Path:
     return Path(project_dir) / ".tausik" / STOP_FILENAME
 
 
+def clear_stop_switch(project_dir: Path | str) -> tuple[bool, str]:
+    """Drop a switch left behind by a run that has already ended.
+
+    The switch says "stop the run that is going". Once that run is over the
+    file outlives its meaning, and the next supervisor reads it as an order
+    meant for itself: it starts, checks the brakes, and leaves — a run that
+    dies at the first step for a reason belonging to yesterday.
+
+    Returns (cleared, error). A missing file is the normal case, not a
+    failure. An unremovable one is: the caller must refuse to start rather
+    than walk into that exact death.
+    """
+    try:
+        stop_switch_path(project_dir).unlink()
+    except FileNotFoundError:
+        return False, ""
+    except OSError as e:
+        return False, str(e)
+    return True, ""
+
+
 def check_brakes(project_dir: Path | str, state: BrakeState) -> Verdict:
     """Consulted before every iteration — never mid-flight.
 
@@ -95,9 +116,7 @@ def check_brakes(project_dir: Path | str, state: BrakeState) -> Verdict:
     costs more to untangle than the extra minute of waiting.
     """
     if stop_switch_path(project_dir).exists():
-        return Verdict(
-            True, "найден файл .tausik/.autoloop.stop — остановка по требованию"
-        )
+        return Verdict(True, "найден файл .tausik/.autoloop.stop — остановка по требованию")
 
     if state.iteration >= state.max_iterations:
         return Verdict(

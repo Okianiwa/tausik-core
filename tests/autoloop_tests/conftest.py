@@ -142,3 +142,52 @@ def _session_has_room(monkeypatch):
     except ImportError:  # a suite that never touches the supervisor
         return
     monkeypatch.setattr(autoloop_run, "session_spent", lambda _dir: None)
+
+
+class FakeProcess:
+    """A process that was never started, and what was done to it afterwards."""
+
+    def __init__(self, cmd):
+        self.cmd = cmd
+        self.waited = False
+        self.killed = False
+
+    def wait(self, *args, **kwargs):
+        self.waited = True
+        return 0
+
+    def poll(self):
+        return None
+
+    def terminate(self):
+        self.killed = True
+
+    kill = terminate
+
+
+@pytest.fixture(autouse=True)
+def spawned(monkeypatch):
+    """Detached processes a test would have started — recorded, never run.
+
+    Measured, not hypothetical. The supervisor opens the run window with
+    `subprocess.Popen`; the loop fixtures stubbed only `subprocess.run`. Three
+    suite runs left 58 tkinter windows across the desktop — one per test that
+    reached the spawn, every one outliving pytest exactly as designed, because
+    the window is built to survive the run it watches.
+
+    Closed here rather than in each fixture: the spawn sits three calls below
+    the test, 29 of them reached it, and every new test would inherit the
+    escape silently. Tests that care about what was launched read this list;
+    the rest are simply kept off the screen.
+    """
+    import subprocess
+
+    started: list[FakeProcess] = []
+
+    def fake_popen(cmd, *args, **kwargs):
+        process = FakeProcess(cmd)
+        started.append(process)
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    return started
