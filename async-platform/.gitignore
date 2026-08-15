@@ -1,0 +1,10 @@
+# Каталог оставлен только ради README-указателя: стенд уехал в Асинхронус
+# (research/async-platform), а на диске остались локальные артефакты — JRE,
+# скачанный сервер Minecraft, build-кэши Gradle.
+#
+# Правило нужно именно здесь: удаление стенда унесло и его собственные
+# .gitignore (async-platform/mc/, async-platform/core/), после чего первый же
+# `git add -A` затащил в индекс 759 файлов, включая jar Mojang.
+*
+!.gitignore
+!README.md
