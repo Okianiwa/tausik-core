@@ -66,7 +66,7 @@ CLI: ВСЕГДА `.tausik/tausik <команда>`. НИКОГДА `python scri
 <!-- DYNAMIC:START -->
 ## Current State
 Session: #46 (active) | Branch: fix/hook-tool-coverage | Version: 1.4.0
-Tasks: 80/103 done, 0 active, 0 blocked
+Tasks: 81/104 done, 0 active, 0 blocked
 
 ### Memory tail
 Decisions (5):
