@@ -72,10 +72,30 @@ def read_active_model_from_transcript(transcript_path: str | None) -> str | None
 def _auto_find_transcript() -> str | None:
     """Best-effort discovery of the active Claude Code transcript.
 
-    Reuses session_metrics.auto_find_transcript when available; returns None
-    if that helper isn't importable (e.g. minimal install). Errors are
-    swallowed so a missing transcript never breaks task_start.
+    `autoloop_presence` answers first — the resolver the rest of the mechanism
+    already uses, so the banner speaks about the same conversation the watcher
+    and the window do. It also carries two rules this path got wrong: the
+    project folder is matched by EXACT name (a scratchpad project created
+    inside a project carries the whole slug in its own name), and a pointer
+    left behind by a session that has ended is not followed.
+
+    session_metrics' own finder stays as the fallback for installs without the
+    autoloop modules. It was the only path for a while, and it was silently
+    dead: imported as a package, `hooks.session_metrics` could not resolve
+    `token_rows` (a sibling inside hooks/), the ImportError landed in the
+    except below, and every task_start reported "active model unknown" — which
+    also meant MODEL MISMATCH could never fire.
+
+    Errors stay swallowed: a missing transcript must not break task_start.
     """
+    try:
+        import autoloop_presence as presence
+
+        path = presence.transcript_path(os.getcwd())
+        if path and os.path.isfile(path):
+            return path
+    except Exception:  # noqa: BLE001 — best-effort: an install without autoloop still gets the fallback
+        pass
     try:
         # Lazy import — keeps model_routing free of hooks/* import chains
         # for callers that only want suggest_model.

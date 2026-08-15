@@ -303,6 +303,101 @@ def test_model_tier_resolves_glm_via_profiles():
     assert _model_tier("claude-opus-4-8") == 2  # claude token path unchanged
 
 
+# --- finding the transcript at all ------------------------------------------
+#
+# Everything above hands the banner an `active_model`. In a real session nobody
+# does: it has to FIND the transcript, and for a long while it could not — the
+# only finder lived behind `hooks.session_metrics`, which cannot resolve its own
+# sibling `token_rows` when imported as a package. The ImportError was swallowed,
+# every task_start printed "active model unknown", and the mismatch warning could
+# not fire at all. A banner that never warns looks exactly like a banner with
+# nothing to warn about.
+
+
+class TestTranscriptDiscovery:
+    @staticmethod
+    def _deployed_session(tmp_path, monkeypatch, model="claude-opus-5"):
+        """A project, its transcript folder, and a session speaking into it."""
+        import json
+
+        import autoloop_presence as presence
+
+        project = tmp_path / "proj"
+        (project / ".tausik").mkdir(parents=True)
+        folder = tmp_path / ".claude" / "projects" / "D--proj"
+        folder.mkdir(parents=True)
+        transcript = folder / "live.jsonl"
+        transcript.write_text(
+            json.dumps({"message": {"model": model, "usage": {"input_tokens": 10}}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            presence.os.path, "expanduser", lambda p: p.replace("~", str(tmp_path), 1)
+        )
+        monkeypatch.setattr(presence, "project_slug", lambda _d: "D--proj")
+        monkeypatch.chdir(project)
+        return transcript
+
+    def test_the_running_session_is_found(self, tmp_path, monkeypatch):
+        from model_routing import _auto_find_transcript, read_active_model_from_transcript
+
+        transcript = self._deployed_session(tmp_path, monkeypatch)
+
+        found = _auto_find_transcript()
+
+        assert found == str(transcript)
+        assert read_active_model_from_transcript(found) == "claude-opus-5"
+
+    def test_the_banner_names_the_model_actually_running(self, tmp_path, monkeypatch):
+        """End to end: no `active_model` handed in, exactly as in task_start."""
+        from model_routing import format_task_start_banner
+
+        self._deployed_session(tmp_path, monkeypatch)
+
+        out = format_task_start_banner(complexity="simple")
+
+        assert "claude-opus-5" in out
+        assert "unknown" not in out
+
+    def test_a_mismatch_is_reachable_in_a_real_tree(self, tmp_path, monkeypatch):
+        """The warning the banner exists for: a complex task on a model below
+        the recommendation. Unreachable for as long as discovery was dead."""
+        from model_routing import format_task_start_banner
+
+        self._deployed_session(tmp_path, monkeypatch, model="claude-haiku-4-5-20251001")
+
+        out = format_task_start_banner(complexity="complex")
+
+        assert "MODEL MISMATCH" in out
+
+    def test_without_a_transcript_the_banner_still_says_unknown(self, tmp_path, monkeypatch):
+        """NEGATIVE: not finding a session stays 'unknown' — never a guess, and
+        never an exception, because task_start runs through here."""
+        import autoloop_presence as presence
+        from model_routing import _auto_find_transcript, format_task_start_banner
+
+        monkeypatch.setattr(
+            presence.os.path, "expanduser", lambda p: p.replace("~", str(tmp_path), 1)
+        )
+        monkeypatch.setattr(presence, "project_slug", lambda _d: "D--nothing-here")
+        monkeypatch.setattr("hooks.session_metrics.auto_find_transcript", lambda: None)
+        monkeypatch.chdir(tmp_path)
+
+        assert _auto_find_transcript() is None
+        assert "unknown" in format_task_start_banner(complexity="simple")
+
+    def test_the_fallback_finder_is_importable_as_a_package(self):
+        """NEGATIVE / regression: `token_rows` is a sibling inside hooks/, so an
+        import that puts only scripts/ on the path dies right here. That death
+        was the whole defect, and it was invisible — swallowed into 'unknown'."""
+        import importlib
+
+        sm = importlib.import_module("hooks.session_metrics")
+
+        assert callable(sm.auto_find_transcript)
+        assert callable(sm.extract_token_rows)
+
+
 class TestProfileSlugSingleSource:
     """model-registry-single-source — the id→slug map must be DERIVED from
     model_profiles, never hand-maintained, so a rank's canonical id and its

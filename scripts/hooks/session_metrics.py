@@ -16,7 +16,14 @@ import os
 import sys
 from glob import glob
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(_HERE))  # scripts/ — cost_pricing, token_accounting
+# hooks/ — token_rows, imported below as a bare sibling. Run as a script that
+# directory is sys.path[0] for free; imported as `hooks.session_metrics` it is
+# not on the path at all, and the ImportError left every caller with "model
+# unknown" instead of a reason.
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
 
 from cost_pricing import calculate_cost_usd  # noqa: E402
 from token_accounting import sum_usage_tokens  # noqa: E402
