@@ -33,16 +33,30 @@ from autoloop_format import (  # noqa: F401 — re-export: consumers call these 
     CELL_ACTIVE,
     CELL_DONE,
     CELL_QUEUED,
+    GAUGE_MARK,
     MAX_READING_AGE_S,
     MODE_AGENTS,
     MODE_CHAT,
+    ROLE_CONTEXT,
+    ROLE_META,
+    ROLE_TASK,
+    ROLE_TASKS,
+    ROLE_WATCH,
     STATUS_FAILED,
     STATUS_IDLE,
     STATUS_RUNNING,
     STATUS_STOPPED,
+    ZONE_CALM,
+    ZONE_HOT,
+    ZONE_UNKNOWN,
+    ZONE_WARM,
     bar,
     caption,
     cat_frame,
+    context_zone,
+    gauge,
+    overlay_rows,
+    watch_line,
     format_cost,
     format_elapsed,
     format_percent,
@@ -185,6 +199,10 @@ def collect(project_dir: str, config: dict | None = None) -> dict:
         "percent": percent,
         "reading_age_seconds": reading_age,
         "soft_threshold": config.get("soft_threshold", 30),
+        # Both thresholds travel with the reading: a viewer that knows only the
+        # soft one cannot tell "past the point where a cleanup is due" from
+        # "past the point where it stops waiting for anything".
+        "hard_threshold": config.get("hard_threshold", 75),
         "tokens": summary["tokens"] if from_journal else unmeasured,
         "cost_usd": summary["cost_usd"] if from_journal else None,
         "elapsed_seconds": _elapsed_seconds(entries)
@@ -200,4 +218,3 @@ def collect(project_dir: str, config: dict | None = None) -> dict:
         "direction": run_state.chat_run(project_dir).get("direction") if chat else None,
         "entries": entries,
     }
-

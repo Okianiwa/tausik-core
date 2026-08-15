@@ -22,6 +22,7 @@ import time
 from typing import IO
 
 import autoloop_keys as keys
+import autoloop_watch_state as wstate
 from autoloop_limits import session_spent, status_text  # noqa: F401 — status_text: tests
 from autoloop_run_state import (  # noqa: F401 — MAX_READING_AGE, reading: tests
     MAX_READING_AGE,
@@ -290,6 +291,19 @@ def watch(
                     if blind
                     else "транскрипт снова читается — наблюдение восстановлено",
                 )
+
+            # Said to the window, not only to the log: both questions the human
+            # asked mid-run were about this state, written where nobody looks.
+            wstate.observe(
+                project_dir,
+                blind=blind,
+                busy=busy,
+                arming=cycle.state != "idle",
+                percent=percent,
+                threshold=threshold,
+                quiet=quiet,
+                workers=len(working),
+            )
 
             if should_act(
                 percent, threshold, quiet, busy=busy, hard=config["hard_threshold"]

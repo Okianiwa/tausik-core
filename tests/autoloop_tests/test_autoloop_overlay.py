@@ -24,6 +24,13 @@ def make_data(project_dir, **over):
     return data
 
 
+def row(data, role):
+    """The painted text for one role. Rows are addressed by MEANING, not by
+    position: the window's order is a design decision and has changed once
+    already — asserting `lines[2]` pins the layout, not the content."""
+    return next(text for r, text in overlay.overlay_rows(data) if r == role)
+
+
 # --- painted content ------------------------------------------------------
 
 
@@ -41,16 +48,17 @@ def test_lines_show_task_progress_context_and_tokens(project_dir, add_task):
         tokens={"output": 4_000, "cache_write": 20_000, "cache_read": 60_000, "total": 84_000},
     )
 
-    lines = overlay_lines(make_data(project_dir))
+    data = make_data(project_dir)
 
-    assert "autoloop" in lines[0]
-    assert "busy" in lines[1]
-    assert "1/2" in lines[2]
-    assert "31.0%" in lines[2]
+    assert "autoloop" in row(data, tui.ROLE_META)
+    assert "busy" in row(data, tui.ROLE_TASK)
+    assert "1/2" in row(data, tui.ROLE_TASKS)
+    context = row(data, tui.ROLE_CONTEXT)
+    assert "31.0%" in context
     # Work done — 20k written plus 4k generated — not the 84k that counts the
     # same context re-read on every request.
-    assert "работа 24.0k тк" in lines[2]
-    assert "84.0k" not in lines[2]
+    assert "работа 24.0k тк" in context
+    assert "84.0k" not in context
 
 
 def test_the_overlay_bar_shows_the_task_it_is_working_on(project_dir, add_task):
@@ -65,10 +73,10 @@ def test_the_overlay_bar_shows_the_task_it_is_working_on(project_dir, add_task):
 
 
 def test_lines_survive_an_empty_project(project_dir):
-    lines = overlay_lines(make_data(project_dir))
+    data = make_data(project_dir)
 
-    assert lines[1] == "—"
-    assert "—" in lines[2]  # unmeasured context renders as a dash
+    assert row(data, tui.ROLE_TASK) == "—"
+    assert "—" in row(data, tui.ROLE_CONTEXT)  # unmeasured context renders as a dash
 
 
 def test_no_tasks_does_not_divide_by_zero(project_dir):
@@ -97,7 +105,7 @@ def test_corner_leaves_room_for_the_taskbar():
 
 def test_a_long_task_slug_cannot_stretch_the_window():
     """The one line whose length nothing else bounds."""
-    line = overlay_lines(
+    line = row(
         {
             "tokens": {"total": 1000},
             "tasks_done": [],
@@ -106,11 +114,72 @@ def test_a_long_task_slug_cannot_stretch_the_window():
             "percent": None,
             "caption": "работаю",
             "current_task": "autoloop-" + "very-long-" * 8,
-        }
-    )[1]
+        },
+        tui.ROLE_TASK,
+    )
 
     assert len(line) <= overlay.TASK_MAX_CHARS
     assert line.endswith("…")
+
+
+# --- hierarchy, zones, and the watcher's own line ---------------------------
+
+
+def test_the_task_is_the_loudest_line_and_the_service_caption_the_quietest():
+    """The window used to run its importance backwards: `autoloop · в чате ·
+    работаю` was the brightest thing on it and the task slug the dimmest —
+    while the slug is what anyone opens the window to read."""
+    task_font, meta_font = overlay.ROW_FONT[tui.ROLE_TASK], overlay.ROW_FONT[tui.ROLE_META]
+
+    assert task_font[1] > meta_font[1], "задача должна быть крупнее служебной подписи"
+    assert "bold" in task_font
+    assert overlay.ROW_FG[tui.ROLE_TASK] == overlay.FG
+    assert overlay.ROW_FG[tui.ROLE_META] == overlay.DIM
+
+
+@pytest.mark.parametrize(
+    "percent,zone",
+    [(12.0, tui.ZONE_CALM), (42.0, tui.ZONE_WARM), (88.0, tui.ZONE_HOT), (None, tui.ZONE_UNKNOWN)],
+)
+def test_the_context_colour_says_whether_to_care(percent, zone):
+    """A bare number tells nobody anything: 58.4% is calm against a 75%
+    threshold and overdue against 30%."""
+    assert tui.context_zone(percent, 30, 75) == zone
+    assert overlay.ZONE_COLOR[zone] in (overlay.FG, overlay.ACCENT, overlay.WARN, overlay.DIM)
+
+
+def test_the_gauge_draws_the_threshold_into_the_bar():
+    """ "How full" and "how close to the wipe" become one glance instead of two
+    numbers and mental arithmetic."""
+    drawn = tui.gauge(50.0, threshold=30, width=10)
+
+    assert len(drawn) == 10
+    assert tui.GAUGE_MARK in drawn
+    assert drawn.index(tui.GAUGE_MARK) == 3  # the 30% mark sits at cell 3 of 10
+
+
+def test_an_unmeasured_context_draws_no_bar_at_all():
+    """NEGATIVE: unknown is not zero — an empty gauge would read as "почти
+    пусто", which is a claim nobody made."""
+    assert set(tui.gauge(None, threshold=30, width=8)) == {"─"}
+
+
+def test_the_watcher_line_says_what_it_is_waiting_for(project_dir):
+    import autoloop_watch_state as wstate
+
+    wstate.observe(str(project_dir), blind=False, busy=True, arming=False, workers=2)
+
+    assert "фоновую работу" in tui.watch_line(wstate.read(str(project_dir)), "шутка")
+
+
+def test_without_a_watcher_the_window_falls_back_to_the_cat(project_dir):
+    """NEGATIVE: no run means there is genuinely nothing to report — inventing
+    a state is exactly the failure this line exists to end. The joke is honest
+    content for "ничего не происходит"."""
+    import autoloop_watch_state as wstate
+
+    assert wstate.read(str(project_dir)) is None
+    assert tui.watch_line(None, "многовато букв, сворачиваюсь") == "многовато букв, сворачиваюсь"
 
 
 # --- geometry from content ------------------------------------------------

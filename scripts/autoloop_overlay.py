@@ -22,6 +22,7 @@ from typing import Any
 
 import autoloop_quips as quips
 import autoloop_tui as tui
+import autoloop_watch_state as wstate
 from tausik_utils import tausik_config_path
 
 REFRESH_MS = 1000
@@ -52,6 +53,36 @@ _STATUS_COLOR = {
     tui.STATUS_STOPPED: DIM,
     tui.STATUS_FAILED: WARN,
 }
+
+# Weight follows importance, which it did not: the service caption was the
+# brightest line and the task slug — the thing anyone opens this window to see —
+# the dimmest. One table, so the hierarchy is a fact a test can read.
+ROW_FONT = {
+    tui.ROLE_TASK: ("Segoe UI", 12, "bold"),
+    tui.ROLE_META: ("Segoe UI", 9),
+    tui.ROLE_TASKS: ("Consolas", 10),
+    tui.ROLE_CONTEXT: ("Consolas", 10),
+}
+ROW_FG = {
+    tui.ROLE_TASK: FG,
+    tui.ROLE_META: DIM,
+    tui.ROLE_TASKS: FG,
+    tui.ROLE_CONTEXT: FG,
+}
+
+# The gauge carries the threshold; the colour carries whether to care.
+ZONE_COLOR = {
+    tui.ZONE_CALM: FG,
+    tui.ZONE_WARM: ACCENT,
+    tui.ZONE_HOT: WARN,
+    tui.ZONE_UNKNOWN: DIM,
+}
+
+# The watcher's own line. Two of these are answers to "why is nothing
+# happening?" and get the accent; the rest is quiet by design.
+PHASE_COLOR = {"arming": ACCENT, "blind": WARN, "busy": DIM}
+
+ROW_ORDER = (tui.ROLE_TASK, tui.ROLE_META, tui.ROLE_TASKS, tui.ROLE_CONTEXT)
 
 
 def position_from_config(project_dir: str) -> tuple[int, int] | None:
@@ -92,26 +123,20 @@ def save_position(project_dir: str, x: int, y: int) -> bool:
     return True
 
 
-def overlay_lines(data: dict) -> list[str]:
-    """The three text lines beside the cat. Pure, so tests can read them.
-
-    The two numbers on the last line answer different questions and have to
-    say so: `ctx` is how full the window is right now, the metric beside it is
-    what the run has produced since it started. Unlabelled and side by side
-    they read as one contradictory measurement — 40% next to millions of
-    tokens. Which metric that is depends on the mode, and `tui.work_short`
-    decides — the window only paints what it is handed.
+def overlay_rows(data: dict) -> list[tuple[str, str]]:
+    """(role, text) as painted: `tui.overlay_rows` with the one bound this
+    window adds — the task slug is the only line whose length nothing else
+    limits, so it is ellipsized here rather than allowed to widen the window.
     """
-    done, active = len(data["tasks_done"]), len(data["tasks_active"])
-    total = data["tasks_total"]
     return [
-        f"autoloop · {data['caption']}",
-        quips.ellipsize(data["current_task"] or "—", TASK_MAX_CHARS),
-        f"{tui.progress_bar(done, active, total, 10)}"
-        f" {tui.progress_label(done, active, total)}"
-        f"   ctx {tui.format_percent(data['percent'])}"
-        f"   {tui.work_short(data)}",
+        (role, quips.ellipsize(text, TASK_MAX_CHARS) if role == tui.ROLE_TASK else text)
+        for role, text in tui.overlay_rows(data)
     ]
+
+
+def overlay_lines(data: dict) -> list[str]:
+    """Just the text, in painted order."""
+    return [text for _role, text in overlay_rows(data)]
 
 
 def _corner(screen_w: int, screen_h: int, size=DEFAULT_SIZE) -> tuple[int, int]:
@@ -235,18 +260,17 @@ def run_overlay(project_dir: str, config: dict | None = None) -> int:
     cat.place(x=PAD_X, y=PAD_Y)
 
     labels = []
-    for index, (font, colour) in enumerate([("Segoe UI", FG), ("Consolas", DIM), ("Consolas", FG)]):
-        size = 10 if index else 11
+    for role in ROW_ORDER:
         label = tk.Label(
             frame,
             text="",
-            font=(font, size),
-            fg=colour,
+            font=ROW_FONT[role],
+            fg=ROW_FG[role],
             bg=BG,
             anchor="w",
             justify="left",
         )
-        label.place(x=104, y=16 + index * 26)
+        label.place(x=104, y=16 + len(labels) * 26)
         labels.append(label)
 
     # One line wide, no wrapping: the text is ellipsized to fit, so a long task
@@ -294,15 +318,26 @@ def run_overlay(project_dir: str, config: dict | None = None) -> int:
             fit()
             root.after(REFRESH_MS, refresh)
             return
-        quip.config(text=picker.update(data, time.monotonic()))
-        lines = overlay_lines(data)
-        for label, text in zip(labels, lines):
+        # The watcher's own words when it has any; the cat's when it does not.
+        # A joke is honest content for "no run is going" and a poor answer to
+        # "why is it showing that number?" — which is what it used to be.
+        watcher = wstate.read(project_dir)
+        quip.config(
+            text=tui.watch_line(watcher, picker.update(data, time.monotonic())),
+            fg=PHASE_COLOR.get((watcher or {}).get("phase"), "#9aa4b8"),
+        )
+        rows = overlay_rows(data)
+        for label, (role, text) in zip(labels, rows):
             label.config(text=text)
-        labels[0].config(fg=_STATUS_COLOR.get(data["status"], FG))
-        if data["percent"] is not None and data["percent"] >= data.get("soft_threshold", 30):
-            labels[2].config(fg=ACCENT)
-        else:
-            labels[2].config(fg=FG)
+            if role == tui.ROLE_META:
+                label.config(fg=_STATUS_COLOR.get(data["status"], DIM))
+            elif role == tui.ROLE_CONTEXT:
+                zone = tui.context_zone(
+                    data["percent"],
+                    data.get("soft_threshold", 30),
+                    data.get("hard_threshold", 75),
+                )
+                label.config(fg=ZONE_COLOR.get(zone, FG))
         fit()
         root.after(REFRESH_MS, refresh)
 

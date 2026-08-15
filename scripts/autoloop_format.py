@@ -216,6 +216,101 @@ def work_full(data: dict) -> tuple[str, str, str]:
     return "работа", f"{fmt(journal.work_tokens(tokens))} за прогон", aside
 
 
+# --- the window's rows, as roles rather than positions ----------------------
+#
+# The overlay used to paint three lines whose importance ran backwards: the
+# service caption `autoloop · в чате · работаю` was the brightest thing on it,
+# and the task slug — the one line anybody actually looks for — was the dimmest.
+# Rows carry a ROLE instead of an index, so the painter decides weight and
+# colour in one place, and a test can assert the hierarchy instead of eyeballing it.
+
+ROLE_TASK = "task"
+ROLE_META = "meta"
+ROLE_TASKS = "tasks"
+ROLE_CONTEXT = "context"
+ROLE_WATCH = "watch"
+
+ZONE_UNKNOWN = "unknown"
+ZONE_CALM = "calm"
+ZONE_WARM = "warm"
+ZONE_HOT = "hot"
+
+GAUGE_MARK = "╎"
+
+
+def context_zone(percent, soft: float = 30, hard: float = 75) -> str:
+    """Which side of the thresholds the context fill is on.
+
+    A bare number tells nobody anything: 58.4% is calm at a 75% threshold and
+    overdue at 30%. The zone is what the colour is for — the figure stays
+    exact, the colour says whether to care.
+    """
+    if percent is None:
+        return ZONE_UNKNOWN
+    if percent >= max(soft, hard):
+        return ZONE_HOT
+    return ZONE_WARM if percent >= soft else ZONE_CALM
+
+
+def gauge(percent, threshold: float = 30, width: int = 10) -> str:
+    """Context fill with the threshold drawn INTO the bar.
+
+    `bar` shows a proportion of nothing in particular. Here the mark sits where
+    the cleanup threshold is, so "how full" and "how close to the wipe" are one
+    glance instead of two numbers and mental arithmetic.
+    """
+    if width <= 0:
+        return ""
+    if percent is None:
+        return "─" * width
+    filled = max(0, min(width, round(float(percent) / 100 * width)))
+    cells = [CELL_DONE] * filled + [CELL_QUEUED] * (width - filled)
+    mark = min(width - 1, max(0, int(float(threshold) / 100 * width)))
+    cells[mark] = GAUGE_MARK
+    return "".join(cells)
+
+
+def overlay_rows(data: dict) -> list[tuple[str, str]]:
+    """(role, text) for the floating window, most important first.
+
+    Two numbers that answer different questions no longer share a line: task
+    progress is one row, context fill another. Unlabelled and side by side they
+    read as one contradictory measurement — 40% next to millions of tokens.
+    """
+    done, active = len(data["tasks_done"]), len(data["tasks_active"])
+    total = data["tasks_total"]
+    soft = data.get("soft_threshold", 30)
+    return [
+        (ROLE_TASK, data.get("current_task") or "—"),
+        (ROLE_META, f"autoloop · {data['caption']}"),
+        (
+            ROLE_TASKS,
+            f"{progress_bar(done, active, total, 10)} {progress_label(done, active, total)}",
+        ),
+        (
+            ROLE_CONTEXT,
+            f"{gauge(data['percent'], soft)} {format_percent(data['percent'])}"
+            f"{format_reading_age(data.get('reading_age_seconds'))}"
+            f"   {work_short(data)}",
+        ),
+    ]
+
+
+def watch_line(state: dict | None, fallback: str = "") -> str:
+    """What the watcher is doing, in the window's one spare line.
+
+    The watcher already knows — it logs "жду тишины", "отложил: работа идёт",
+    "взвожу уборку" into a file nobody opens, while the window showed a joke.
+    Both questions the human asked during the run ("почему старое?", "чего он
+    ждёт?") were answerable from this line. When there is no run, the joke is
+    the honest content: there is nothing to report.
+    """
+    if not isinstance(state, dict):
+        return fallback
+    text = str(state.get("detail") or "").strip()
+    return text or fallback
+
+
 def render_text(data: dict) -> str:
     """Plain-text rendering — used by tests and as the fallback when textual
     is unavailable or the output is not a terminal."""

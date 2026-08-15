@@ -353,15 +353,21 @@ def test_both_halves_stay_under_the_filesize_gate():
 
 def test_dashboard_and_overlay_share_one_bar():
     """AC: one implementation. Two of them drift, and the one that drifts is
-    the one nobody happens to be looking at."""
+    the one nobody happens to be looking at.
+
+    Each consumer reaches the shared layer by the call that suits it — the
+    terminal composes its own line from `tui.progress_bar`, the window takes
+    whole rows from `tui.overlay_rows` — but NEITHER may own a bar of its own,
+    which is what the glyph check below actually pins.
+    """
     import inspect
 
     import autoloop_overlay as overlay
     import autoloop_screen as screen
 
-    for module in (screen, overlay):
+    for module, entry in ((screen, "tui.progress_bar("), (overlay, "tui.overlay_rows(")):
         source = inspect.getsource(module)
-        assert "tui.progress_bar(" in source
+        assert entry in source
         assert "def progress_bar" not in source
         for glyph in (tui.CELL_DONE, tui.CELL_ACTIVE, tui.CELL_QUEUED):
             assert glyph not in source, f"{module.__name__} не рисует полосу сам"
@@ -640,8 +646,9 @@ class TestTheWorkMetricFitsItsMode:
         make_entry(project_dir, tokens={"output": 30, "cache_write": 10})
         data = collect(str(project_dir))
 
-        assert "работа — тк" not in overlay_lines(data)[2]
-        assert "уборок 1" in overlay_lines(data)[2]
+        painted = "\n".join(overlay_lines(data))
+        assert "работа — тк" not in painted
+        assert "уборок 1" in painted
         for rendering in (render_text(data), screen.body_markup(data)):
             assert "за прогон" not in rendering
             assert "запись кэша" not in rendering
