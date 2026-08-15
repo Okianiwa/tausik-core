@@ -145,10 +145,16 @@ def _as_local_path(raw: str) -> Path:
     back to the session directory and refused a legitimate push. Only the
     `/<letter>/…` shape is rewritten, and only on Windows, where it cannot
     collide with a real absolute path.
+
+    `~` is the shell's own shorthand and never reaches git unexpanded, so the
+    hook expands it as well. Left literal it is a RELATIVE path under the
+    session directory — no repository there, so neither HEAD nor repo_root
+    could be read, and the session's own ticket was consumed for a push into
+    a different repository (`cd ~/.tausik-lib && git push`).
     """
     if os.name == "nt" and len(raw) > 2 and raw[0] == "/" and raw[2] == "/" and raw[1].isalpha():
         return Path(f"{raw[1]}:/{raw[3:]}")
-    return Path(raw)
+    return Path(os.path.expanduser(raw))
 
 
 def _command_target_dir(command: str) -> Path | None:

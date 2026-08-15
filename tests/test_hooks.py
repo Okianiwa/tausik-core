@@ -1030,6 +1030,57 @@ class TestPushTicketAcrossRepositories:
         )
         assert r.returncode == 0, r.stderr
 
+    def test_a_tilde_path_is_expanded(self, tmp_path):
+        """`cd ~/.tausik-lib && git push` is what the shell expands before git
+        sees it. Read literally, `~/lib` is a relative path under the session
+        directory: the gate looked for HEAD there, found no repository, and
+        refused a push it had just authorized."""
+        home = tmp_path / "home"
+        repo = home / "lib"
+        ticket = self._ticket_for(repo, self._init_repo(repo))
+        r = run_hook(
+            "git_push_gate.py",
+            {"tool_input": {"command": "cd ~/lib && git push"}},
+            env_extra={"HOME": str(home), "USERPROFILE": str(home)},
+            cwd=self._session(tmp_path),
+        )
+        assert r.returncode == 0, r.stderr
+        assert not ticket.exists(), "ticket must be consumed"
+
+    def test_a_tilde_push_without_a_ticket_still_blocks(self, tmp_path):
+        """NEGATIVE: expanding `~` reaches the right repository, it does not
+        excuse the ticket."""
+        home = tmp_path / "home"
+        repo = home / "lib"
+        self._init_repo(repo)
+        r = run_hook(
+            "git_push_gate.py",
+            {"tool_input": {"command": "cd ~/lib && git push"}},
+            env_extra={"HOME": str(home), "USERPROFILE": str(home)},
+            cwd=self._session(tmp_path),
+        )
+        assert r.returncode == 2
+        assert "no push ticket" in r.stderr
+
+    def test_a_tilde_path_does_not_borrow_the_session_ticket(self, tmp_path):
+        """NEGATIVE: the session's own ticket must not authorize a push into
+        the home repository. Unexpanded, `~/lib` is no repository at all, so
+        neither the repo_root nor the HEAD check could fire and the session's
+        ticket was consumed for a repository it was never issued for."""
+        session_repo = tmp_path / "session"
+        sha = self._init_repo(session_repo)
+        self._ticket_for(session_repo, sha)
+        home = tmp_path / "home"
+        self._init_repo(home / "lib")
+        r = run_hook(
+            "git_push_gate.py",
+            {"tool_input": {"command": "cd ~/lib && git push"}},
+            env_extra={"HOME": str(home), "USERPROFILE": str(home)},
+            cwd=str(session_repo),
+        )
+        assert r.returncode == 2
+        assert "issued for" in r.stderr
+
     def test_a_ticket_does_not_open_the_firewall(self, tmp_path):
         """NEGATIVE: what bash_firewall refuses stays refused — a valid ticket
         authorizes a push, not a history rewrite."""
