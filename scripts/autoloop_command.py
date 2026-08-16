@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "hooks"))
 
 import autoloop_chat_cycle as cycle
+import autoloop_clean_request as clean_request
 import autoloop_keys as keys
 import autoloop_run_state as run_state
 import autoloop_watch as watch
@@ -63,6 +64,12 @@ def start(project_dir: str, direction: str) -> str:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     if not cycle.start_run(project_dir, direction, now):
         return "не удалось объявить прогон — файл не записался"
+
+    # A request nobody consumed — the run was withdrawn while it waited on
+    # background work, or the watcher died holding it. Left alone it belongs to
+    # the first tick of THIS run, and wipes a conversation whose owner asked
+    # for nothing. Same reason a stuck `.autoloop.stop` is cleared here.
+    clean_request.drop(project_dir)
 
     # Right here, not further down: from this line the run exists, and the
     # window belongs to the run rather than to any of the watcher outcomes
@@ -121,7 +128,46 @@ def stop(project_dir: str) -> str:
     if not cycle.run_declared(project_dir):
         return "прогона нет — останавливать нечего"
     cycle.end_run(project_dir)
+    clean_request.drop(project_dir)  # an unread request must not outlive its run
     return "прогон снят; наблюдатель уйдёт в течение пары секунд, работа не обрывается"
+
+
+def clean(project_dir: str) -> str:
+    """Ask for the context to be cleaned now instead of when it fills up.
+
+    Deliberately does not ask whether the agent is busy. This process is a
+    fresh descendant of the chat, which is exactly what `background_pids`
+    counts as work — it would find itself and report "busy" every single time.
+    The watcher asks that question from outside, on its own tick; the answer
+    here only has to be honest about what that means for the human waiting.
+    """
+    if run_state.mode(project_dir) == run_state.MODE_AGENTS:
+        return (
+            "идёт прогон агентами: у каждой итерации свой чистый контекст, "
+            "чистить в чате нечего. Итоги — /auto отчёт"
+        )
+    if not cycle.run_declared(project_dir):
+        # Not merely useless — harmful. Nobody would consume the file, and the
+        # next `/auto` would find it lying there and wipe a conversation the
+        # person had started for something else entirely.
+        return (
+            "прогона нет — наблюдателя не существует, уборку проводить некому. "
+            "Запрос не оставлен: он пролежал бы до следующего /auto и сработал "
+            "внезапно. Начать прогон: /auto"
+        )
+    if not clean_request.request(project_dir):
+        return "не удалось оставить запрос на уборку — файл не записался"
+    if not watch.alive(_lock_owner(project_dir)):
+        return (
+            "запрос оставлен, но наблюдатель не поднят: уборка не начнётся, пока "
+            "он не появится — он поднимается на старте сессии. Проверить: /auto статус"
+        )
+    return (
+        "уборка пройдёт на ближайшем тике наблюдателя: /checkpoint → /clear → /start. "
+        "Порог заполнения, тишина и карантин не спрашиваются — попросили же. "
+        "Если сейчас идёт фоновая работа, уборка дождётся её конца: /clear посреди "
+        "работы теряет незавершённое"
+    )
 
 
 def status(project_dir: str) -> str:
@@ -148,8 +194,10 @@ def main(argv: list[str]) -> int:
         print(stop(project_dir))
     elif command == "status":
         print(status(project_dir))
+    elif command == "clean":
+        print(clean(project_dir))
     else:
-        print("использование: autoloop_command.py start <направление> | stop | status")
+        print("использование: autoloop_command.py start <направление> | stop | status | clean")
     return 0
 
 

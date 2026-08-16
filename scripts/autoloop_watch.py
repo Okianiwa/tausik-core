@@ -21,6 +21,7 @@ import sys
 import time
 from typing import IO
 
+import autoloop_clean_request as clean_request
 import autoloop_keys as keys
 import autoloop_watch_state as wstate
 from autoloop_limits import session_spent, status_text  # noqa: F401 — status_text: tests
@@ -247,7 +248,7 @@ def watch(
     log(project_dir, f"старт: pid={pid}, порог {threshold}%")
     clear_ready(project_dir)
 
-    blind, armed_screen = False, None
+    blind, armed_screen, deferred = False, None, False
     busy, busy_since = False, None
     try:
         while alive(pid):
@@ -305,6 +306,28 @@ def watch(
                 quiet=quiet,
                 workers=len(working),
             )
+
+            # A cleanup that was asked for. It goes straight to the sequence:
+            # everything the countdown below weighs — how full the window is,
+            # how long the chat has been quiet, whether a refusal is still in
+            # cooldown — the human answered by asking. Sending it through the
+            # countdown would do worse than delay it: the request arrives in
+            # their own turn, so `human_quiet` is seconds old, and the branch
+            # that cancels on a person returning would kill this cleanup on the
+            # very next tick and hold the next one off for ten minutes.
+            if clean_request.due(project_dir, busy):
+                log(project_dir, "уборка по просьбе человека")
+                # A countdown already in flight is superseded, and without the
+                # refusal cooldown a normal cancel would leave behind.
+                cycle.cancel(now=now, quiet_for=0.0)
+                clean_request.drop(project_dir)  # before the keys — see `drop`
+                run_sequence(project_dir, pid, cycle)
+                armed_screen, deferred = None, False
+                time.sleep(POLL_SECONDS)
+                continue
+            if clean_request.requested(project_dir) and not deferred:
+                deferred = True  # said once, not every couple of seconds
+                log(project_dir, "уборка по просьбе ждёт конца фоновой работы")
 
             if should_act(
                 percent, threshold, quiet, busy=busy, hard=config["hard_threshold"]
