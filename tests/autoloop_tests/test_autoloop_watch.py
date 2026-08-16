@@ -128,6 +128,62 @@ class TestWorkStillRunningIsNotSilence:
 
         assert presence.background_pids(100, table, age_of=lambda _pid: None) == {200}
 
+    def test_a_process_that_only_lives_is_not_work(self):
+        """The defect this split answers: serena starts Eclipse JDT LS lazily,
+        on the first Java symbol lookup, so it is born long after the boot
+        grace and counted as work for as long as the MCP server lives.
+        Measured on a live chat — the tree sat at 4 processes for 98 minutes
+        and chat-watch.log never logged "работа кончилась"."""
+        cpu = {200: 5.0}  # same reading on both ticks
+
+        _, first = presence.busy_pids({200}, None, cpu_of=cpu.get)
+        working, _ = presence.busy_pids({200}, first, cpu_of=cpu.get)
+
+        assert working == set()
+
+    def test_cpu_growth_between_ticks_is_work(self):
+        """The other half of the pair. Measured over the watcher's own 2s tick:
+        idle reads 0 ms, a working process 344 ms — nothing to tune between."""
+        readings = iter([5.0, 5.344])
+
+        _, first = presence.busy_pids({200}, None, cpu_of=lambda _pid: next(readings))
+        working, _ = presence.busy_pids({200}, first, cpu_of=lambda _pid: next(readings))
+
+        assert working == {200}
+
+    def test_a_first_sighting_proves_nothing_yet(self):
+        """No baseline means no evidence — one tick later there is. Short-lived
+        shells are covered by the transcript clock, not by this counter."""
+        working, snapshot = presence.busy_pids({200}, None, cpu_of=lambda _pid: 5.0)
+
+        assert working == set()
+        assert snapshot == {200: 5.0}
+
+    def test_work_launched_through_an_mcp_server_still_counts(self):
+        """NEGATIVE: the rejected fix was to prune every subtree hanging off a
+        boot-era process. It would have cleared the language server AND blinded
+        the counter to `mcp__windows-mcp__PowerShell`, which starts real work
+        under its own server. Parentage must not decide; CPU must."""
+        table = {100: (1, "claude.exe"), 200: (100, "mcp.exe"), 300: (200, "powershell.exe")}
+        ages = {100: 1000.0, 200: 1001.0, 300: 1500.0}  # server with the chat, job later
+        started = presence.background_pids(100, table, age_of=ages.get, grace=120)
+        readings = iter([1.0, 1.5])
+
+        _, first = presence.busy_pids(started, None, cpu_of=lambda _pid: next(readings))
+        working, _ = presence.busy_pids(started, first, cpu_of=lambda _pid: next(readings))
+
+        assert started == {300}
+        assert working == {300}
+
+    def test_an_unreadable_cpu_does_not_block_the_cleanup(self):
+        """NEGATIVE: same direction `started_at` already takes — a process that
+        cannot be asked is not proven to be working, and blocking forever on
+        something unreadable is the worse failure."""
+        working, snapshot = presence.busy_pids({200}, {200: 5.0}, cpu_of=lambda _pid: None)
+
+        assert working == set()
+        assert snapshot == {}
+
     def test_a_dead_registration_does_not_linger(self, project_dir):
         """NEGATIVE: a registry that only grows would eventually name a recycled
         pid and hide real work behind it."""

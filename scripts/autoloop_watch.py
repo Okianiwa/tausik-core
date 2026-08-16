@@ -32,6 +32,7 @@ from autoloop_run_state import (  # noqa: F401 — MAX_READING_AGE, reading: tes
 )
 from autoloop_presence import (
     background_pids,
+    busy_pids,
     human_idle_seconds,
     idle_seconds,
     own_pids,
@@ -250,6 +251,7 @@ def watch(
 
     blind, armed_screen, deferred = False, None, False
     busy, busy_since = False, None
+    cpu_seen: dict[int, float] = {}  # last tick's CPU per pid — the busy/idle baseline
     try:
         while alive(pid):
             # The human said stop. Nothing to signal and no PID to get wrong:
@@ -266,7 +268,11 @@ def watch(
             # From the process tree, not a marker: a stuck marker here would
             # mean no cleanup ever. Own processes excluded by registry.
             own = own_pids(project_dir, keys.pid_exists)
-            working = background_pids(pid, keys.process_table(), own)
+            # Two questions, not one: what the agent STARTED, then which of it
+            # is actually running. A lazily-started language server answers yes
+            # to the first forever and no to the second — see `busy_pids`.
+            started = background_pids(pid, keys.process_table(), own)
+            working, cpu_seen = busy_pids(started, cpu_seen)
             if bool(working) != busy:
                 busy = bool(working)
                 log(

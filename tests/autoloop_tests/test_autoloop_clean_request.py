@@ -66,8 +66,12 @@ def spin(
     )
     monkeypatch.setattr(watch.keys, "console_text", lambda _pid: "> ")
     monkeypatch.setattr(watch.keys, "process_table", dict)
+    # Busy is decided by `busy_pids`, not by `background_pids`: the latter
+    # answers "the agent started this", which a lazily-started language server
+    # satisfies forever. These tests are about what a cleanup REQUEST does with
+    # a busy watcher, so they stub the answer, not the CPU readings behind it.
     monkeypatch.setattr(
-        watch, "background_pids", lambda *_a, **_k: {999} if next(occupied) else set()
+        watch, "busy_pids", lambda *_a, **_k: ({999} if next(occupied) else set(), {})
     )
     monkeypatch.setattr(watch.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(watch.time, "sleep", lambda _s: None)

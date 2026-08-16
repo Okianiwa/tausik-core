@@ -381,6 +381,37 @@ def started_at(pid: int) -> float | None:
         return None
 
 
+def cpu_time(pid: int) -> float | None:
+    """Seconds of CPU this process has burned, or None when it cannot be asked.
+
+    Kernel plus user time from the same call `started_at` makes — the two
+    answers come out of one `GetProcessTimes`, and reading them apart keeps
+    each caller's failure its own.
+    """
+    try:
+        import ctypes
+        import ctypes.wintypes as wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x1000, False, int(pid))  # QUERY_LIMITED_INFORMATION
+        if not handle:
+            return None
+        try:
+            created, exited, kern, user = (wintypes.FILETIME() for _ in range(4))
+            if not kernel32.GetProcessTimes(
+                handle, *(ctypes.byref(t) for t in (created, exited, kern, user))
+            ):
+                return None
+            ticks = sum(
+                (t.dwHighDateTime << 32) | t.dwLowDateTime for t in (kern, user)
+            )
+            return ticks / 1e7  # 100ns units -> seconds
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:  # noqa: BLE001 — an unaskable process is "not proven working"
+        return None
+
+
 # A process that came up with the chat is part of its furniture, not its work.
 BOOT_GRACE_SECONDS = 120.0
 
@@ -422,3 +453,57 @@ def background_pids(
         if born is not None and born > chat_started + grace:
             fresh.add(pid)
     return fresh
+
+
+def busy_pids(
+    candidates,
+    previous: dict[int, float] | None,
+    cpu_of=None,
+) -> tuple[set[int], dict[int, float]]:
+    """Of the agent's processes, the ones that actually DID something.
+
+    Returns (working, snapshot); feed the snapshot back as `previous` next tick.
+
+    `background_pids` answers "the agent started this", which is not the same
+    question as "the agent is busy". A language server is the case that forced
+    the split: serena starts Eclipse JDT LS LAZILY, on the first Java symbol
+    lookup, so it is born long after `BOOT_GRACE_SECONDS` and counts as work
+    for as long as the MCP server lives. Measured on a live chat: the tree sat
+    at 4 processes for 98 minutes, and `chat-watch.log` went from
+    "фоновая работа: 3 процессов" at 15:29:13 straight to the run being torn
+    down at 17:02:53 — no "работа кончилась" in between. In a Java project the
+    counter had a permanent floor and cleanup could never happen.
+
+    CPU growth separates the two cleanly. Measured over the watcher's own 2s
+    tick: an idle JDT LS reads 0 ms on every tick, a working process 344 ms.
+    There is no threshold to tune between 0 and hundreds, so any growth counts
+    and the comparison stays exact.
+
+    Bursty work reads zero on most ticks — the same measurement caught the
+    reference burning 0.4s every 6s and showing 0 · 0 · 344 · 0 · 0 · 281.
+    That is fine HERE and not fine in general: the caller resets `busy_since`
+    on every busy tick and caps quiet time by it, so a gap shorter than
+    IDLE_SECONDS never accumulates into silence. A job whose CPU gaps exceed
+    that (a long network wait) does read as idle — stated rather than hidden,
+    because 45 seconds of zero CPU across every descendant is a defensible
+    reading of "nothing is happening".
+
+    A pid whose CPU cannot be read is NOT work, matching `started_at`'s own
+    direction: the conservative move is to let a cleanup happen rather than
+    block it forever on something unreadable.
+    """
+    read = cpu_time if cpu_of is None else cpu_of
+    seen = previous or {}
+    working: set[int] = set()
+    snapshot: dict[int, float] = {}
+    for pid in candidates:
+        current = read(pid)
+        if current is None:
+            continue
+        snapshot[pid] = current
+        # First sighting has no baseline, so it proves nothing yet. One tick
+        # later it does; short-lived shells are covered by the transcript
+        # clock, not by this counter.
+        if pid in seen and current > seen[pid]:
+            working.add(pid)
+    return working, snapshot
