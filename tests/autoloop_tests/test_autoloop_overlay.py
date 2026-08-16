@@ -468,3 +468,59 @@ def test_collect_failure_is_handled_by_the_refresh_loop():
 
     assert "except Exception" in refresh_source
     assert refresh_source.count("root.after(REFRESH_MS, refresh)") >= 2
+
+
+# --- the window outliving the run it shows ---------------------------------
+
+
+def test_a_withdrawn_run_closes_the_window():
+    """AC-1: `/auto стоп` removes the declaration and the watcher leaves on its
+    own; the window used to stay, spending a process and a screen corner on
+    announcing that nothing is happening. Overturns the surviving clause of
+    decision #13 ("остаётся открытым со спящим котом")."""
+    seen, misses, closed = True, 0, False
+    for _ in range(overlay.GONE_LIMIT):
+        closed, seen, misses = overlay.run_gone(tui.STATUS_STOPPED, seen, misses)
+
+    assert closed is True
+
+
+def test_a_run_not_yet_seen_alive_never_closes_the_window():
+    """NEGATIVE: `start()` declares the run, raises the window, and only THEN
+    spawns the watcher — so the first readings can say "stopped" for a run
+    about to begin. Closing on those is a window that never opens."""
+    seen, misses = False, 0
+    for _ in range(overlay.GONE_LIMIT * 3):
+        closed, seen, misses = overlay.run_gone(tui.STATUS_STOPPED, seen, misses)
+        assert closed is False
+
+
+def test_one_reading_does_not_take_the_window_down():
+    """NEGATIVE: `refresh` already refuses to die on a transient error. A single
+    "no run" is the same class of stumble and must not be decisive."""
+    closed, seen, misses = overlay.run_gone(tui.STATUS_STOPPED, True, 0)
+
+    assert closed is False
+    assert misses == 1
+
+
+def test_an_idle_run_is_alive_and_resets_the_count():
+    """NEGATIVE: STATUS_IDLE is a declared run between iterations, not an absent
+    one. Counting it as gone would close the window mid-run, every time the
+    agent paused."""
+    closed, seen, misses = overlay.run_gone(tui.STATUS_IDLE, True, overlay.GONE_LIMIT - 1)
+
+    assert closed is False
+    assert misses == 0
+    assert seen is True
+
+
+def test_a_run_that_comes_back_clears_the_tally():
+    """A stumble followed by a live reading must not leave the window one
+    reading away from closing for the rest of the run."""
+    _, seen, misses = overlay.run_gone(tui.STATUS_STOPPED, True, 0)
+    _, seen, misses = overlay.run_gone(tui.STATUS_RUNNING, seen, misses)
+    closed, _, _ = overlay.run_gone(tui.STATUS_STOPPED, seen, misses)
+
+    assert misses == 0
+    assert closed is False

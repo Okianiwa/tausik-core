@@ -20,7 +20,20 @@ import sys
 from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
-sys.path.insert(0, str(PROJECT_DIR / ".claude" / "scripts"))
+# `autoloop_journal` is a SIBLING in both layouts — beside this file in the
+# hub's `scripts/`, and beside it again in a project's `.claude/scripts/`. So
+# no arithmetic is needed, and the arithmetic that was here was wrong: counting
+# three parents to the project root and appending `.claude/scripts` is right
+# only for the DEPLOYED copy. In the hub this file sits one level shallower, so
+# three parents overshoot past the checkout into the user's home and put
+# `~/.claude/scripts` on sys.path — at IMPORT time, for the whole process.
+# Every autoloop module imported afterwards then came from the profile instead
+# of the checkout (measured: `autoloop_overlay.__file__` under `~/.claude`
+# during a full suite run), which means a green test run can be green about
+# code that is not the source. It is also an execution surface, not merely an
+# import one: any `autoloop_journal.py` dropped into that directory would be
+# run. Sibling imports need no path arithmetic at all.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import autoloop_journal as journal  # noqa: E402
 

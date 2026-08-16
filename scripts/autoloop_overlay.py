@@ -135,6 +135,44 @@ def overlay_rows(data: dict) -> list[tuple[str, str]]:
     ]
 
 
+# Consecutive "no run" readings before the window goes. Three of them at
+# REFRESH_MS is ~3s — long enough that a stumble does not take the window
+# down, short enough that nobody wonders why it is still there.
+GONE_LIMIT = 3
+
+
+def run_gone(status, seen_run: bool, misses: int, limit: int = GONE_LIMIT):
+    """One reading of the run's status → (close, seen_run, misses).
+
+    A window is a view of a run; once the run is withdrawn the view has no
+    subject, and leaving it up spends a process and a corner of the screen on
+    announcing that nothing is happening. Decision #13 kept it open "with a
+    sleeping cat"; #14 overturned only its clause about modes, and this
+    overturns the rest. Closing loses nothing: the run's totals — commits,
+    cost, closed tasks — live in the journal and come back with `/auto отчёт`.
+
+    Two guards, both from how the window is actually started and read:
+
+    * `start()` declares the run, raises the window, and only THEN spawns the
+      watcher. Status is read through the watcher's state, so the first
+      readings can legitimately say "stopped" for a run about to begin.
+      Closing on those would mean a window that never opens — so nothing
+      closes until the run has been seen alive at least once.
+    * A single reading proves little. `refresh` already refuses to die on a
+      transient error, and this keeps that promise: it takes `limit` readings
+      in a row, not one.
+
+    STATUS_IDLE is a live run between iterations, not an absent one — only
+    STATUS_STOPPED counts as gone.
+    """
+    if status != tui.STATUS_STOPPED:
+        return False, True, 0
+    if not seen_run:
+        return False, seen_run, 0
+    misses += 1
+    return misses >= limit, seen_run, misses
+
+
 def overlay_lines(data: dict) -> list[str]:
     """Just the text, in painted order."""
     return [text for _role, text in overlay_rows(data)]
@@ -286,7 +324,14 @@ def run_overlay(project_dir: str, config: dict | None = None) -> int:
     # corner live together because they are one window's mutable state, and
     # the closures below all read and write it. Annotated so the union does
     # not collapse into a type none of the members satisfy.
-    state: dict[str, Any] = {"tick": 0, "drag": None, "size": DEFAULT_SIZE, "corner": (x, y)}
+    state: dict[str, Any] = {
+        "tick": 0,
+        "drag": None,
+        "size": DEFAULT_SIZE,
+        "corner": (x, y),
+        "seen_run": False,  # the run must be seen alive before its absence counts
+        "gone": 0,
+    }
     picker = quips.QuipPicker()
 
     def fit() -> None:
@@ -318,6 +363,12 @@ def run_overlay(project_dir: str, config: dict | None = None) -> int:
             quip.config(text="")
             fit()
             root.after(REFRESH_MS, refresh)
+            return
+        close, state["seen_run"], state["gone"] = run_gone(
+            data["status"], state["seen_run"], state["gone"]
+        )
+        if close:
+            root.destroy()  # the run it shows is over; so is its reason to exist
             return
         # The watcher's own words when it has any; the cat's when it does not.
         # A joke is honest content for "no run is going" and a poor answer to
