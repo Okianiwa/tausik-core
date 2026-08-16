@@ -19,6 +19,7 @@ import sqlite3
 from typing import Any, Callable
 
 from gate_runner import summarize_results
+from gate_scope import split_by_project_root
 
 from verify_run_record import (
     RECORD_FAILED_STATUS,
@@ -49,6 +50,50 @@ def handle_no_test_mapped(
     Вызывается ТОЛЬКО когда files непусты, results непусты и каждый результат
     помечен skipped — проверку этого условия делает вызывающий.
     """
+    # A scope that is entirely FOREIGN is a different failure from a missing
+    # test, and must not be answered with the same advice: "add
+    # tests/test_<basename>.py" cannot be followed for a file this project does
+    # not own (convention #129 — a remediation is judged by executing its text).
+    # Blocking here would leave portfolio work unclosable by any action
+    # available to it, so the closure is allowed and said out loud instead.
+    #
+    # Recorded, like every other verdict in this module: a run that lets a task
+    # close has to leave a row (decision #146). `no_tests_declared=1` is the
+    # existing marker for "no gate executed behind this closure", which is
+    # literally what happened — one SQL query still finds every such close.
+    own_files, foreign_files = split_by_project_root(files)
+    if not own_files:
+        if append_notes_fn is not None:
+            append_notes_fn(
+                slug,
+                f"NOT VERIFIED HERE: all {len(foreign_files)} relevant_files belong to "
+                f"another project ({', '.join(foreign_files)}). This project's gates "
+                "checked NOTHING — closing is an operator assertion, not a verification, "
+                "and the evidence has to come from the project that owns the code.",
+            )
+        try:
+            _record_verification(
+                conn,
+                slug=slug,
+                scope=scope,
+                command=cache_command,
+                exit_code=0,
+                summary=summarize_results(results),
+                files_hash=files_hash,
+                duration_ms=duration_ms,
+                gate_results=results,
+                scope_desc=scope_desc,
+                trigger=trigger,
+                details=details,
+                no_tests_declared=True,
+            )
+        except VerificationRecordError as exc:
+            # Same reasoning as the declared-no-tests branch below: this verdict
+            # rests ENTIRELY on the row, because no gate ran. Without it the
+            # closure rests on nothing countable, so the write failing flips it.
+            return False, [*results, record_failure_result(exc)], RECORD_FAILED_STATUS
+        return True, results, "foreign-scope"
+
     # verify-no-test-mapped-dead-end: closing the CLI's bypass turned this
     # branch into a dead end for a whole class of work — a documentation or
     # config task maps to no test, so it blocked with no way out. The way

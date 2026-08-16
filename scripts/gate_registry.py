@@ -69,6 +69,15 @@ class GateSpec:
     # changelog diff by construction. Declared here rather than as an `if` in
     # the runner so the exception is visible next to the gate it exempts.
     skip_on_fileless_close: bool = False
+    # Does this gate's verdict come FROM the handed-in file list? Such a gate
+    # answers "all clear" on an empty list (measured on `filesize`: skipped=False,
+    # "All files within line limit") — a real PASS that covered nothing. When a
+    # foreign scope empties the list, `run_gates` must report those as skipped
+    # instead. Gates that ignore `files` by design (class_surface, memory_route,
+    # state_roundtrip, bootstrap_drift, renar_drift_*) verify the same thing
+    # either way and stay untouched. Declared here for the reason the whole
+    # registry exists: a second list in the runner is a second place to drift.
+    judges_scope: bool = False
     # Post-scope gates that predate this registry own a config key of their
     # own (changelog: `task_done.changelog_gate.enabled`). The resolver lets
     # `gates status` report what will actually happen instead of the registry
@@ -112,6 +121,7 @@ _SCOPED: tuple[GateSpec, ...] = (
         name="filesize",
         phase=PHASE_SCOPED,
         impl="gate_filesize:run_filesize_gate",
+        judges_scope=True,
         default_config={
             "enabled": True,
             "severity": "block",
@@ -164,6 +174,7 @@ _SCOPED: tuple[GateSpec, ...] = (
         name="tdd_order",
         phase=PHASE_SCOPED,
         impl="gate_tdd_order:run_tdd_order_gate",
+        judges_scope=True,
         default_config={
             "enabled": False,
             "severity": "warn",
@@ -256,6 +267,7 @@ _SCOPED: tuple[GateSpec, ...] = (
         name="skill_spec_conformance",
         phase=PHASE_SCOPED,
         impl="skill_spec_conformance:run_skill_conformance_gate",
+        judges_scope=True,
         default_config={
             "enabled": True,
             "severity": "block",
@@ -376,6 +388,17 @@ def impl_for(name: str) -> Callable[..., Any] | None:
     if spec is None or spec.impl.startswith("svc:"):
         return None
     return _resolve_dotted(spec.impl)
+
+
+def judges_scope(name: str) -> bool:
+    """Does this gate's verdict come from the handed-in file list?
+
+    False for anything the registry does not know: a stack or user gate is a
+    command gate by construction, and those already answer an empty scope
+    honestly through `_SCOPED_SKIP_SENTINEL` rather than with a bare pass.
+    """
+    spec = GATE_REGISTRY.get(name)
+    return bool(spec and spec.judges_scope)
 
 
 def bound_impl_for(spec: GateSpec, svc: Any) -> Callable[..., Any]:

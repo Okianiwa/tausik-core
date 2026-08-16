@@ -40,7 +40,8 @@ from gate_tdd_order import run_tdd_order_gate  # noqa: F401, E402
 from gate_renar_drift import run_renar_drift_gate  # noqa: F401, E402
 from gate_bootstrap_drift import run_bootstrap_drift_gate  # noqa: F401, E402
 from gate_test_resolver import resolve_test_files_for_relevant  # noqa: F401, E402
-from gate_registry import impl_for  # noqa: E402
+from gate_registry import impl_for, judges_scope  # noqa: E402
+from gate_scope import external_scope_note, split_by_project_root  # noqa: E402
 from tausik_utils import cli_invocation  # noqa: E402
 
 # How to spell the CLI in a remediation the reader's shell will accept.
@@ -76,6 +77,15 @@ def run_gates(
     gates = get_gates_for_trigger(trigger, cfg)
     if not gates:
         return True, []
+
+    # Foreign files leave the scope BEFORE any gate sees them: their rules
+    # belong to their own project, and judging them here answers a question
+    # nobody asked — a 479-line test file from a repo that exempts tests blocked
+    # a close on `max 400`. What was dropped is reported beside every result;
+    # see gate_scope for why silence would be the worse of the two failures.
+    files_in, files_out = split_by_project_root(files or [])
+    scope_emptied = bool(files_out) and not files_in
+    scope_note = external_scope_note(files_out, scope_emptied=scope_emptied) if files_out else None
 
     results = []
     has_block_failure = False
@@ -119,8 +129,38 @@ def run_gates(
                 }
             )
 
-        if not gate_applies_to(gate, files or []):
-            skipped = skipped_result(gate, files or [])
+        # An emptied scope is reported as "verified nothing", never as a pass:
+        # a gate that judges the list it is handed answers "all clear" on an
+        # empty one (measured), which is indistinguishable from a real green.
+        if scope_emptied and judges_scope(name):
+            results.append(
+                {
+                    "name": name,
+                    "severity": severity,
+                    "passed": True,
+                    "skipped": True,
+                    "output": scope_note,
+                    "duration_ms": int((time.monotonic() - start_ms) * 1000),
+                }
+            )
+            if progress_callback:
+                progress_callback(
+                    {
+                        "event": "gate_done",
+                        "index": idx,
+                        "total": total,
+                        "name": name,
+                        "severity": severity,
+                        "passed": True,
+                        "skipped": True,
+                        "duration_ms": int((time.monotonic() - start_ms) * 1000),
+                        "output": scope_note,
+                    }
+                )
+            continue
+
+        if not gate_applies_to(gate, files_in):
+            skipped = skipped_result(gate, files_in)
             # Third result-shaping branch: it needs duration_ms too, or a
             # stack-mismatch skip persists as NULL while every other outcome
             # carries a real value.
@@ -149,9 +189,9 @@ def run_gates(
         # (stack-declared, user-defined) is a command gate by construction.
         impl = impl_for(name)
         if impl is not None:
-            passed, output = impl(gate, files or [])
+            passed, output = impl(gate, files_in)
         elif gate.get("command"):
-            passed, output = run_command_gate(gate, files or [])
+            passed, output = run_command_gate(gate, files_in)
         else:
             # No implementation and no command: this gate cannot run. It used to
             # reach `run_command_gate`, which answered "No command configured."
@@ -181,7 +221,7 @@ def run_gates(
                 skip_reason = (
                     "No test file maps to relevant_files via "
                     "tests/test_<basename>.py heuristic; gate skipped (scoped run)."
-                    if files
+                    if files_in
                     # verify-warn-names-a-flag-verify-does-not-have: this
                     # used to name a bare `--relevant-files` with no command
                     # attached, and the command a reader would try it on
@@ -257,6 +297,10 @@ def run_gates(
         if not passed and severity == "block":
             has_block_failure = True
 
+    if scope_note:
+        for r in results:
+            r["scope_note"] = scope_note
+
     return not has_block_failure, results
 
 
@@ -322,6 +366,12 @@ def format_results(results: list[dict]) -> str:
             # the trusted field above and is never duplicated here.
             for line in output.split("\n")[:5]:
                 lines.append(f"         {line}")
+        # Printed even on PASS, unlike `output` above: a narrowed scope is
+        # precisely the case where the verdict looks stronger than it is, and a
+        # bare [PASS] beside dropped files claims coverage that never happened.
+        note = r.get("scope_note")
+        if note and not (not r["passed"] and output == note):
+            lines.append(f"         {note}")
     return "\n".join(lines)
 
 
