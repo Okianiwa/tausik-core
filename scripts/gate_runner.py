@@ -40,7 +40,7 @@ from gate_tdd_order import run_tdd_order_gate  # noqa: F401, E402
 from gate_renar_drift import run_renar_drift_gate  # noqa: F401, E402
 from gate_bootstrap_drift import run_bootstrap_drift_gate  # noqa: F401, E402
 from gate_test_resolver import resolve_test_files_for_relevant  # noqa: F401, E402
-from gate_registry import impl_for, judges_scope  # noqa: E402
+from gate_registry import SCOPE_IGNORES, SCOPE_JUDGES, impl_for, scope_use_of  # noqa: E402
 from gate_scope import external_scope_note, split_by_project_root  # noqa: E402
 from tausik_utils import cli_invocation  # noqa: E402
 
@@ -132,7 +132,7 @@ def run_gates(
         # An emptied scope is reported as "verified nothing", never as a pass:
         # a gate that judges the list it is handed answers "all clear" on an
         # empty one (measured), which is indistinguishable from a real green.
-        if scope_emptied and judges_scope(name):
+        if scope_emptied and scope_use_of(name) == SCOPE_JUDGES:
             results.append(
                 {
                     "name": name,
@@ -298,8 +298,14 @@ def run_gates(
             has_block_failure = True
 
     if scope_note:
+        # Not on every result: a gate that ignores `files` by design scanned the
+        # whole repo, and "this gate verified NOTHING" beside its PASS is the
+        # same false reading as a silent narrowing, pointed the other way. Seen
+        # on the first live run — the note stood beside class_surface,
+        # memory_route and both renar gates, all of which had checked the tree.
         for r in results:
-            r["scope_note"] = scope_note
+            if scope_use_of(r["name"]) != SCOPE_IGNORES:
+                r["scope_note"] = scope_note
 
     return not has_block_failure, results
 

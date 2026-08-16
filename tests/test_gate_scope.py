@@ -27,7 +27,7 @@ import gate_scope  # noqa: E402
 import service_verification as sv  # noqa: E402
 from conftest import VERIFICATION_RUNS_DDL  # noqa: E402
 from gate_runner import format_results, run_gates  # noqa: E402
-from gate_registry import judges_scope  # noqa: E402
+from gate_registry import SCOPE_CONSUMES, SCOPE_IGNORES, SCOPE_JUDGES, scope_use_of  # noqa: E402
 from gate_scope import external_scope_note, split_by_project_root  # noqa: E402
 
 _FILESIZE_ONLY = [{"name": "filesize", "severity": "block", "max_lines": 400}]
@@ -181,20 +181,28 @@ class TestOnlyScopeJudgingGatesAreMuted:
     вердикт на «проверено ничего» значило бы соврать в другую сторону."""
 
     def test_the_registry_names_the_list_judging_gates(self):
-        assert judges_scope("filesize") is True
-        assert judges_scope("tdd_order") is True
-        assert judges_scope("skill_spec_conformance") is True
+        assert scope_use_of("filesize") == SCOPE_JUDGES
+        assert scope_use_of("tdd_order") == SCOPE_JUDGES
+        assert scope_use_of("skill_spec_conformance") == SCOPE_JUDGES
 
-    def test_a_gate_that_ignores_files_is_not_muted(self):
-        assert judges_scope("class_surface") is False
-        assert judges_scope("memory_route") is False
-        assert judges_scope("state_roundtrip") is False
+    def test_a_gate_that_ignores_files_is_named_as_such(self):
+        for name in (
+            "class_surface",
+            "memory_route",
+            "state_roundtrip",
+            "bootstrap_drift",
+            "renar_drift_schema",
+            "renar_drift_provenance",
+        ):
+            assert scope_use_of(name) == SCOPE_IGNORES, name
 
-    def test_an_unknown_gate_is_not_muted(self):
+    def test_an_unknown_gate_merely_consumes_the_list(self):
         """Стековый или пользовательский гейт — командный по построению, и на
-        пустой скоуп он отвечает своим сентинелом, а не голым PASS."""
-        assert judges_scope("hadolint") is False
-        assert judges_scope("не-существует") is False
+        пустой скоуп он отвечает своим сентинелом, а не голым PASS. Заглушать
+        его нельзя: команда сама решает, что делать со списком (mypy без файлов
+        читает pyproject и уходит смотреть всё дерево)."""
+        assert scope_use_of("hadolint") == SCOPE_CONSUMES
+        assert scope_use_of("не-существует") == SCOPE_CONSUMES
 
     def test_a_file_ignoring_gate_still_runs_on_an_emptied_scope(self, tmp_path, monkeypatch):
         """Проверка на поведении, а не на флаге: гейт, игнорирующий список,
@@ -218,6 +226,12 @@ class TestOnlyScopeJudgingGatesAreMuted:
         assert ran == [[]], "гейт вызван, пусть и с пустым списком — он его не смотрит"
         assert results[0]["output"] == "проверено"
         assert results[0].get("skipped") is not True
+        # Найдено на первом же живом прогоне, а не придумано: строка «этот гейт
+        # проверил НИЧЕГО» стояла рядом с class_surface, memory_route и обоими
+        # renar-гейтами — каждый из которых прошёлся по всему дереву. Это то же
+        # ложное чтение, что и тихое сужение скоупа, только вывернутое.
+        assert "scope_note" not in results[0], "гейт, прошедший по дереву, ничего не терял"
+        assert "verified NOTHING" not in format_results(results)
 
 
 class TestScopeNoteIsRendered:

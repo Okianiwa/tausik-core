@@ -54,6 +54,11 @@ from typing import Any, Callable, cast
 PHASE_SCOPED = "scoped"
 PHASE_POST_SCOPE = "post_scope"
 
+# How a gate treats the file list it is handed — see `GateSpec.scope_use`.
+SCOPE_JUDGES = "judges"
+SCOPE_IGNORES = "ignores"
+SCOPE_CONSUMES = "consumes"
+
 
 @dataclass(frozen=True)
 class GateSpec:
@@ -69,15 +74,24 @@ class GateSpec:
     # changelog diff by construction. Declared here rather than as an `if` in
     # the runner so the exception is visible next to the gate it exempts.
     skip_on_fileless_close: bool = False
-    # Does this gate's verdict come FROM the handed-in file list? Such a gate
-    # answers "all clear" on an empty list (measured on `filesize`: skipped=False,
-    # "All files within line limit") — a real PASS that covered nothing. When a
-    # foreign scope empties the list, `run_gates` must report those as skipped
-    # instead. Gates that ignore `files` by design (class_surface, memory_route,
-    # state_roundtrip, bootstrap_drift, renar_drift_*) verify the same thing
-    # either way and stay untouched. Declared here for the reason the whole
-    # registry exists: a second list in the runner is a second place to drift.
-    judges_scope: bool = False
+    # What this gate does with the handed-in file list. Three genuinely
+    # different answers, and the scope guard needs all three:
+    #
+    # * SCOPE_JUDGES — the verdict is computed FROM the list. On an empty list
+    #   such a gate answers "all clear" (measured on `filesize`: skipped=False,
+    #   "All files within line limit") — a real PASS that covered nothing, so a
+    #   foreign scope that empties the list must report it as skipped instead.
+    # * SCOPE_IGNORES — `files` is ignored by design; the check is whole-repo
+    #   (class_surface, memory_route, state_roundtrip, bootstrap_drift,
+    #   renar_drift_*). It verifies exactly the same thing whatever the scope,
+    #   so it must NOT be muted and must NOT carry a "verified nothing" note:
+    #   saying that beside a check that scanned the whole tree is the same
+    #   false reading, pointed the other way.
+    # * SCOPE_CONSUMES (default) — the gate takes the narrowed list but decides
+    #   for itself what to do with it. Command gates live here: they already
+    #   answer an empty scope honestly through their own sentinel, so they are
+    #   told what was dropped and left to run.
+    scope_use: str = SCOPE_CONSUMES
     # Post-scope gates that predate this registry own a config key of their
     # own (changelog: `task_done.changelog_gate.enabled`). The resolver lets
     # `gates status` report what will actually happen instead of the registry
@@ -121,7 +135,7 @@ _SCOPED: tuple[GateSpec, ...] = (
         name="filesize",
         phase=PHASE_SCOPED,
         impl="gate_filesize:run_filesize_gate",
-        judges_scope=True,
+        scope_use=SCOPE_JUDGES,
         default_config={
             "enabled": True,
             "severity": "block",
@@ -141,6 +155,7 @@ _SCOPED: tuple[GateSpec, ...] = (
         name="class_surface",
         phase=PHASE_SCOPED,
         impl="gate_class_surface:run_class_surface_gate",
+        scope_use=SCOPE_IGNORES,
         default_config={
             "enabled": True,
             "severity": "block",
@@ -174,7 +189,7 @@ _SCOPED: tuple[GateSpec, ...] = (
         name="tdd_order",
         phase=PHASE_SCOPED,
         impl="gate_tdd_order:run_tdd_order_gate",
-        judges_scope=True,
+        scope_use=SCOPE_JUDGES,
         default_config={
             "enabled": False,
             "severity": "warn",
@@ -192,6 +207,7 @@ _SCOPED: tuple[GateSpec, ...] = (
         name="bootstrap_drift",
         phase=PHASE_SCOPED,
         impl="gate_bootstrap_drift:run_bootstrap_drift_gate_for",
+        scope_use=SCOPE_IGNORES,
         default_config={
             "enabled": True,
             "severity": "block",
@@ -209,6 +225,7 @@ _SCOPED: tuple[GateSpec, ...] = (
         name="memory_route",
         phase=PHASE_SCOPED,
         impl="gate_memory_route:run_memory_route_gate",
+        scope_use=SCOPE_IGNORES,
         default_config={
             "enabled": True,
             "severity": "block",
@@ -223,6 +240,7 @@ _SCOPED: tuple[GateSpec, ...] = (
         name="renar_drift_schema",
         phase=PHASE_SCOPED,
         impl="gate_renar_drift:run_renar_drift_gate_for",
+        scope_use=SCOPE_IGNORES,
         default_config={
             "enabled": True,
             "severity": "warn",
@@ -235,6 +253,7 @@ _SCOPED: tuple[GateSpec, ...] = (
         name="renar_drift_provenance",
         phase=PHASE_SCOPED,
         impl="gate_renar_drift:run_renar_drift_gate_for",
+        scope_use=SCOPE_IGNORES,
         default_config={
             "enabled": True,
             "severity": "warn",
@@ -253,6 +272,7 @@ _SCOPED: tuple[GateSpec, ...] = (
         name="state_roundtrip",
         phase=PHASE_SCOPED,
         impl="gate_state_roundtrip:run_state_roundtrip_gate_for",
+        scope_use=SCOPE_IGNORES,
         default_config={
             "enabled": True,
             "severity": "block",
@@ -267,7 +287,7 @@ _SCOPED: tuple[GateSpec, ...] = (
         name="skill_spec_conformance",
         phase=PHASE_SCOPED,
         impl="skill_spec_conformance:run_skill_conformance_gate",
-        judges_scope=True,
+        scope_use=SCOPE_JUDGES,
         default_config={
             "enabled": True,
             "severity": "block",
@@ -390,15 +410,15 @@ def impl_for(name: str) -> Callable[..., Any] | None:
     return _resolve_dotted(spec.impl)
 
 
-def judges_scope(name: str) -> bool:
-    """Does this gate's verdict come from the handed-in file list?
+def scope_use_of(name: str) -> str:
+    """How this gate treats the file list — one of the SCOPE_* values.
 
-    False for anything the registry does not know: a stack or user gate is a
-    command gate by construction, and those already answer an empty scope
-    honestly through `_SCOPED_SKIP_SENTINEL` rather than with a bare pass.
+    `SCOPE_CONSUMES` for anything the registry does not know: a stack or user
+    gate is a command gate by construction, and those answer an empty scope
+    through their own sentinel rather than with a bare pass.
     """
     spec = GATE_REGISTRY.get(name)
-    return bool(spec and spec.judges_scope)
+    return spec.scope_use if spec else SCOPE_CONSUMES
 
 
 def bound_impl_for(spec: GateSpec, svc: Any) -> Callable[..., Any]:
