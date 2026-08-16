@@ -134,17 +134,18 @@ Check status: `.tausik/tausik gates status`. Fix blocking failures before commit
 
 TOOL_ROUTING = """## Tool Routing — when to use which
 
-Don't reach for `Grep`/`Glob` first. TAUSIK ships dedicated retrieval MCP servers; using them keeps context lean and surfaces project-specific knowledge that raw text search cannot.
+Don't reach for `Grep`/`Glob` first. TAUSIK ships dedicated retrieval MCP servers; using them keeps context lean and surfaces project-specific knowledge that raw text search cannot. Rows marked † need an optional server that TAUSIK does not ship: if the name is absent from this session's tool list, take the fallback and never invent the call.
 
 | Need | Primary | Fallback |
 |---|---|---|
-| Find a function/symbol/usage in code | `mcp__codebase-rag__search_code` | `Grep` (only if RAG returns no hits or index is stale) |
-| Recall a past project decision | `tausik_decisions_list` / `tausik_memory_search` (`type=convention/pattern`) | — |
-| Cross-project pattern or gotcha | `mcp__tausik-brain__brain_search` | — |
+| Find code you can only describe by meaning | `mcp__codebase-rag__search_code` | `Grep` (only if RAG returns no hits or index is stale) |
+| Read or edit a named symbol † | Serena `get_symbols_overview`, `find_symbol`, `replace_symbol_body`, `rename_symbol`, `safe_delete_symbol` | `Read` / `Edit` |
+| Callers, impact radius, data flow, architecture † | `mcp__codebase-memory__trace_path`, `get_architecture` | Serena `find_referencing_symbols`, `Glob` |
+| Recall a decision, convention or gotcha | `tausik_decisions_list` / `tausik_memory_search` here, `mcp__tausik-brain__brain_search` across projects | — |
 | Web lookup (docs, API, errors) | `mcp__tausik-brain__brain_get` against the cached web result first | `WebFetch` (auto-cached on success) |
-| Understand the project structure | `tausik_status` + `tausik_roadmap` | `Glob` for raw file listing |
+| Project state: tasks, roadmap, progress | `tausik_status` + `tausik_roadmap` | — |
 
-Run `mcp__codebase-rag__rag_status` once per session to confirm the index is fresh. If `chunks=0`, run `mcp__codebase-rag__reindex` before any `search_code` call.
+Run `mcp__codebase-rag__rag_status` once per session to confirm the index is fresh; if `chunks=0`, run `mcp__codebase-rag__reindex` before any `search_code` call. And if a host-level layer already routes code tools — a Claude Code output style, a Cursor rule, a replaced system prompt — that layer wins for code and this table covers only the rest: two routing tables in context contradict each other, and a contradiction costs more adherence than the extra rules buy.
 """
 
 CURSOR_MCP_SETUP = """## Local MCP in Cursor (this workspace)
