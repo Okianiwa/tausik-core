@@ -155,7 +155,7 @@ Show:
 - **No tests exist**: Warn but don't block (suggest writing tests)
 - **Multiple active tasks**: Compare `git diff --name-only` against each task's `scope` field (from `tausik_task_show`). If no scope set, ask the user which task to ship
 - **Nothing to commit**: Skip commit step, just close task
-- **Push gate blocks**: Run `tausik push-ok && git push` — `push-ok` writes a single-use 60s ticket bound to HEAD SHA; this skill is authorized to do so only after user confirmation
+- **Push gate blocks**: Run `tausik push-ok`, then `git push` — as two separate calls, never chained with `&&`. The hook checks before the shell runs, so a chained `push-ok` has not written its ticket yet and the push is blocked with a refusal that misdirects. `push-ok` writes a single-use 60s ticket bound to HEAD SHA; this skill is authorized to do so only after user confirmation
 
 ## Gotchas
 

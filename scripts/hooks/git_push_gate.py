@@ -2,10 +2,19 @@
 """PreToolUse hook: block git push without an explicit, single-use ticket.
 
 The agent should use /ship or /commit, which (after user "y" confirmation)
-run `tausik push-ok && git push`. `tausik push-ok` writes a 60-second TTL
-ticket at `.tausik/.push_ticket.json`, bound to the current HEAD SHA and
-branch. This hook consumes the ticket on a valid match and allows the push;
-otherwise it blocks.
+run `tausik push-ok` and `git push` as TWO SEPARATE shell calls. `push-ok`
+writes a 60-second TTL ticket bound to the current HEAD SHA and branch —
+in the repository's git dir, falling back to `.tausik/` for a checkout
+without git. This hook consumes the ticket on a valid match and allows the
+push; otherwise it blocks.
+
+Two calls — never the two chained onto one line with `&&`. This is PreToolUse:
+it judges the command string BEFORE the shell runs any of it, so a `push-ok`
+sitting in the same line has not executed yet and no ticket exists at check
+time. The one-line form therefore cannot ever pass — and its refusal is
+actively misleading, naming a stale ticket ("expired") or a directory
+push-ok never wrote to, which has already sent readers hunting for a
+writer/reader path mismatch that does not exist.
 
 Why a ticket file instead of an env flag — Claude Code, Cursor and Qwen Code
 all run PreToolUse hooks in the harness process, not the Bash subprocess.
@@ -358,10 +367,15 @@ def main() -> int:
     print(
         "BLOCKED: git push requires a TAUSIK push ticket.\n"
         f"Reason: {reason}\n"
-        "Use /ship (review + gates + push) or /commit (commit + push). "
-        "Both skills run `tausik push-ok && git push` after your 'y' "
-        "confirmation. The ticket is single-use, expires in 60 seconds, "
-        "and is bound to the current commit SHA.",
+        "Authorize with TWO SEPARATE calls — this hook runs before the "
+        "shell, so a `push-ok` chained onto the same line has not run yet "
+        "and cannot help:\n"
+        "  1) tausik push-ok\n"
+        "  2) git push ...\n"
+        "Or use /ship (review + gates + push) or /commit (commit + push), "
+        "which do exactly that after your 'y' confirmation. The ticket is "
+        "single-use, expires in 60 seconds, and is bound to the current "
+        "commit SHA — so run step 2 right after step 1.",
         file=sys.stderr,
     )
     return 2

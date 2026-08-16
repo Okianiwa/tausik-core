@@ -84,23 +84,35 @@ After a successful commit, ask the user: **"Push to remote? (y/n)"**
 - If the user says yes (or originally asked to push):
   1. Determine the remote and branch: `git rev-parse --abbrev-ref HEAD`.
   2. Check if branch tracks a remote: `git rev-parse --abbrev-ref @{u} 2>/dev/null`.
-  3. Authorize the push with a single-use ticket, then push:
+  3. Authorize the push with a single-use ticket, then push — as **two
+     separate shell calls**, never chained on one line:
   ```bash
-  tausik push-ok && git push
+  tausik push-ok
   ```
-  or if no upstream:
+  then, as the next call:
   ```bash
-  tausik push-ok && git push -u origin <branch>
+  git push
   ```
+  or if no upstream: `git push -u origin <branch>`.
+
+  **Why two calls.** `git_push_gate` is a PreToolUse hook: it judges the
+  command string *before* the shell runs any of it. A `push-ok` chained
+  with `&&` has not executed at check time, so no ticket exists and the
+  push is blocked — with a refusal that names a stale ticket or a
+  directory `push-ok` never wrote to. That misreading has cost whole
+  sessions; the fix is the call boundary, not the ticket path.
+
   `tausik push-ok` writes a 60-second TTL ticket bound to the current
   HEAD SHA; `git_push_gate` consumes it on the next push and re-blocks
-  any subsequent push until you authorize again.
+  any subsequent push until you authorize again. The TTL is short — issue
+  the push call immediately after, and re-run `push-ok` if a push fails
+  and you retry, because a consumed ticket is gone.
 - If the user says no — done, do not push.
 - **NEVER force-push** unless the user explicitly asks.
 
 ## Rules
 - **ALWAYS ask before committing** — never auto-commit
-- **NEVER push** unless explicitly asked — when pushing, run `tausik push-ok && git push` (the ticket is single-use, expires in 60s, and is bound to HEAD SHA)
+- **NEVER push** unless explicitly asked — when pushing, run `tausik push-ok` and `git push` as two separate calls, never chained on one line (the hook checks before the shell runs, so a chained `push-ok` has not written its ticket yet). The ticket is single-use, expires in 60s, and is bound to HEAD SHA
 - **NEVER use --no-verify** or skip hooks
 - **NEVER amend** unless user explicitly requests it
 - If pre-commit hook fails: fix, re-stage, create NEW commit
