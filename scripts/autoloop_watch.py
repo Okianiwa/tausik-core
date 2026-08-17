@@ -57,6 +57,7 @@ from autoloop_chat_cycle import (
     run_declared,
     run_direction,
     sequence,
+    turn_ended_at,
     wait_ready,
 )
 
@@ -76,6 +77,10 @@ ANCHOR_SECONDS = 1200.0
 # stalled but finished, and a mechanism typing into an empty queue forever is
 # worse than one that stops and says so.
 ANCHOR_TRIES = 3
+# Hooks may append to the transcript just after the Stop that ended the turn.
+# A tolerance for that, and nothing else: the thing it must never swallow is a
+# long tool call, which is minutes.
+TURN_END_SLACK = 10.0
 
 
 def log(project_dir: str, message: str) -> None:
@@ -123,10 +128,30 @@ def quiet_after_work(quiet, now, busy_since):
     return min(quiet, now - busy_since)
 
 
+def standing_seconds(ended_at, last_write, now_wall, slack: float = TURN_END_SLACK):
+    """How long the run has been STANDING — no turn in flight — or None.
+
+    The flag's mtime says when the host last reported the input line free; the
+    transcript's says when anything was last written. Their order is the answer:
+    the turn's final message is written just before the Stop hook fires, so a
+    standing chat has the flag last. A write AFTER it means a turn is running,
+    however quiet it looks.
+
+    `slack` exists because hooks may append their own lines a moment after Stop.
+    It is a tolerance for that, not a tuning knob for the 45s question — the gap
+    it must never swallow is a long tool call, which is minutes, not seconds.
+    """
+    if ended_at is None or last_write is None:
+        return None
+    if last_write > ended_at + slack:
+        return None
+    return max(0.0, now_wall - ended_at)
+
+
 def anchor_due(
     now,
     last_at,
-    quiet,
+    standing_for,
     *,
     busy: bool,
     arming: bool,
@@ -140,19 +165,21 @@ def anchor_due(
     no window. It answers the other half of the same defect — a chat that sat
     still long enough for its own rules to fade out of the context it kept.
 
-    Every condition here is a way of NOT talking over somebody: work in flight
-    is left alone, an armed cleanup outranks a nudge (it re-anchors and clears,
-    which is strictly more), and the same 45 seconds that guard the cleanup
-    guard this.
+    Every condition is a way of NOT talking over somebody. `standing_for` is the
+    one that had to be measured rather than reasoned about: the first version
+    asked the transcript how long it had been quiet, and a quiet transcript means
+    the TURN ended, not the work — the same trap this file warns about two
+    functions up. It cost a delivery into a chat 20 minutes into a background
+    command; the host queued it, which is the only reason it was harmless.
 
-    The quiet here is the whole transcript's, NOT `human_idle_seconds`. The
-    cancel path wants the human's clock, because the agent's own steps are not
-    somebody walking in; this one wants the opposite — those steps are the proof
-    the run is alive, and a nudge delivered over them is the interruption.
+    Work in flight is left alone, and an armed cleanup outranks a nudge because
+    it re-anchors AND clears, which is strictly more. `last_at` is a floor, not
+    the clock: a delivery that failed leaves the flag untouched, and without the
+    floor the next tick would try again two seconds later.
     """
     if wasted >= tries or busy or arming:
         return False
-    if quiet is None or quiet < IDLE_SECONDS:
+    if standing_for is None or standing_for < gap:
         return False
     return (now - last_at) >= gap
 
@@ -326,6 +353,8 @@ def watch(
             path = transcript_path(project_dir, transcript)
             quiet = idle_seconds(path)
             now = time.monotonic()
+            now_wall = time.time()  # the flags below are file times, not ticks
+            last_write = None if quiet is None else now_wall - quiet
             # From the process tree, not a marker: a stuck marker here would
             # mean no cleanup ever. Own processes excluded by registry.
             own = own_pids(project_dir, keys.pid_exists)
@@ -339,7 +368,7 @@ def watch(
                 pid,
                 table,
                 own,
-                quiet_since=None if quiet is None else time.time() - quiet,
+                quiet_since=last_write,
             )
             working, cpu_seen = busy_pids(started, cpu_seen)
             if bool(working) != busy:
@@ -437,7 +466,7 @@ def watch(
             if direction and anchor_due(
                 now,
                 anchor_at,
-                quiet,
+                standing_seconds(turn_ended_at(project_dir), last_write, now_wall),
                 busy=busy,
                 arming=cycle.state != "idle",
                 wasted=anchor_wasted,

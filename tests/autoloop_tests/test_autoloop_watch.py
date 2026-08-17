@@ -357,21 +357,56 @@ class TestTheAnchor:
     window; it hands the direction back."""
 
     LONG = watch.ANCHOR_SECONDS + 1
+    ENDED, NOW = 5000.0, 5000.0 + watch.ANCHOR_SECONDS + 1
 
     def due(self, **over):
         args = {"busy": False, "arming": False, "wasted": 0}
         args.update(over)
-        return watch.anchor_due(self.LONG, 0.0, 600.0, **args)
+        return watch.anchor_due(self.LONG, 0.0, self.LONG, **args)
+
+    def standing(self, last_write):
+        return watch.standing_seconds(self.ENDED, last_write, self.NOW)
 
     def test_a_stalled_run_gets_its_direction_back(self):
-        assert self.due() is True
+        """NEGATIVE for the fix below: hardening the idleness test must not turn
+        the anchor off. The turn ended, nothing was written after it, and the
+        interval has passed."""
+        standing = self.standing(self.ENDED - 1)
 
-    def test_nothing_happens_before_the_gap(self):
-        assert watch.anchor_due(60.0, 0.0, 600.0, busy=False, arming=False, wasted=0) is False
+        assert standing == pytest.approx(watch.ANCHOR_SECONDS + 1)
+        assert watch.anchor_due(self.LONG, 0.0, standing, busy=False, arming=False, wasted=0)
+
+    def test_a_running_turn_is_not_a_standing_run(self):
+        """The defect this class was rewritten for. Measured on a live run at
+        19:15:32: the agent was 20 minutes into `gameprobe-run.sh`, the
+        transcript had not moved for all of it, and the first version read that
+        as an empty room. The host queued the delivery, which is the only reason
+        it cost nothing. A write AFTER the turn ended means a turn is running,
+        however quiet it looks."""
+        assert self.standing(self.ENDED + 60) is None
+
+    def test_no_word_from_the_host_means_no_nudge(self):
+        """NEGATIVE: without the Stop hook's flag there is no evidence the turn
+        ended — the transcript alone cannot say. Silence beats guessing."""
+        assert watch.standing_seconds(None, self.ENDED, self.NOW) is None
+
+    def test_an_unreadable_transcript_means_no_nudge(self):
+        """NEGATIVE: the same answer `should_act` gives — an unreadable chat is
+        not an empty room."""
+        assert watch.standing_seconds(self.ENDED, None, self.NOW) is None
+
+    def test_a_hook_writing_just_after_the_turn_still_counts_as_standing(self):
+        """The tolerance the slack exists for: hooks append their own lines a
+        moment after Stop. What it must never swallow is a long tool call, which
+        is minutes — see the test above."""
+        assert self.standing(self.ENDED + watch.TURN_END_SLACK - 1) is not None
+
+    def test_nothing_happens_before_the_interval(self):
+        assert watch.anchor_due(60.0, 0.0, 60.0, busy=False, arming=False, wasted=0) is False
 
     def test_a_working_run_is_not_nudged(self):
-        """NEGATIVE: the transcript is silent while a job the agent started
-        runs. A nudge there lands on an agent mid-step."""
+        """NEGATIVE: a job the agent started may run long after its turn ended.
+        A nudge there lands on work in flight."""
         assert self.due(busy=True) is False
 
     def test_an_armed_cleanup_outranks_the_nudge(self):
@@ -380,20 +415,19 @@ class TestTheAnchor:
         this ordering avoids."""
         assert self.due(arming=True) is False
 
-    def test_a_live_conversation_is_never_interrupted(self):
-        """The same 45 seconds that guard the cleanup guard this."""
-        assert watch.anchor_due(self.LONG, 0.0, 5.0, busy=False, arming=False, wasted=0) is False
-
-    def test_an_unknown_quiet_never_nudges(self):
-        """NEGATIVE: an unreadable transcript is not an empty room — the same
-        answer `should_act` gives."""
-        assert watch.anchor_due(self.LONG, 0.0, None, busy=False, arming=False, wasted=0) is False
-
     def test_three_nudges_that_moved_nothing_end_it(self):
         """NEGATIVE: silence can mean finished, not stalled. A mechanism typing
         into an empty queue until morning is worse than one that stops."""
         assert self.due(wasted=watch.ANCHOR_TRIES) is False
         assert self.due(wasted=watch.ANCHOR_TRIES - 1) is True
+
+    def test_a_failed_delivery_does_not_retry_every_tick(self):
+        """The floor `last_at` keeps: a delivery that failed leaves the host's
+        flag untouched, so the standing time alone would fire again in two
+        seconds."""
+        assert watch.anchor_due(
+            10.0, 0.0, self.LONG, busy=False, arming=False, wasted=0, gap=watch.ANCHOR_SECONDS
+        ) is False
 
 
 def test_an_unknown_quiet_never_acts():

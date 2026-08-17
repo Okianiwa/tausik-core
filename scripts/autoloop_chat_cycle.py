@@ -157,6 +157,26 @@ def is_ready(project_dir: str) -> bool:
     return os.path.exists(flag_path(project_dir))
 
 
+def turn_ended_at(project_dir: str) -> float | None:
+    """Wall clock of the last turn END, as the HOST reported it, or None.
+
+    The Stop hook writes this flag (`hooks/chat_ready.py`), so its mtime is the
+    only thing in the system that separates «the turn ended» from «the turn is
+    running quietly». The transcript's own clock cannot: a long tool call writes
+    nothing for minutes and reads exactly like an empty room. Measured — a
+    delivery landed on an agent 20 minutes into `gameprobe-run.sh`, and the host
+    queued it because the turn was still running.
+
+    Read, never consumed. `_wait_flag` eats the flag on purpose, because a
+    leftover answers the next question before it is asked; a caller asking «how
+    long has it been standing» must leave it for the next tick.
+    """
+    try:
+        return os.path.getmtime(flag_path(project_dir))
+    except OSError:
+        return None
+
+
 def clear_ready(project_dir: str) -> None:
     try:
         os.unlink(flag_path(project_dir))
