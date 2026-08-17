@@ -31,6 +31,10 @@ PHASE_ARMING = "arming"
 PHASE_WAITING = "waiting"
 PHASE_WATCHING = "watching"
 
+# The plaque sizes itself to its text, so this is about staying readable next to
+# a percentage, not about a hard limit.
+MAX_WORKER_NAME = 22
+
 
 def phase_of(*, blind: bool, busy: bool, arming: bool, percent=None, threshold=None) -> str:
     """Which state the watcher is in, in priority order.
@@ -51,16 +55,33 @@ def phase_of(*, blind: bool, busy: bool, arming: bool, percent=None, threshold=N
     return PHASE_WATCHING
 
 
-def phrase(phase: str, *, quiet=None, percent=None, threshold=None, workers: int = 0) -> str:
+def phrase(
+    phase: str,
+    *,
+    quiet=None,
+    percent=None,
+    threshold=None,
+    workers: int = 0,
+    worker: str = "",
+) -> str:
     """One line for a small window: what is happening and what it is waiting for.
 
     Deliberately says the REASON, not the verdict. «жду тишины» answers the
     question the number alone provoked; «уборки не будет» without a reason just
     moves the question one step along.
+
+    The waited-for process is NAMED because the count alone did not answer the
+    question either: «1 проц.» sent the human looking for an agent that was not
+    there twice in one run, while the real answer was the graph server's own
+    index worker.
     """
     if phase == PHASE_BLIND:
         return "не вижу чат — уборки не будет"
     if phase == PHASE_BUSY:
+        if worker:
+            name = worker[:MAX_WORKER_NAME]
+            more = f" +{workers - 1}" if workers > 1 else ""
+            return f"жду фоновую работу: {name}{more}"
         return f"жду фоновую работу · {workers} проц." if workers else "жду фоновую работу"
     if phase == PHASE_ARMING:
         return "взвожу уборку — говори, и отменю"
@@ -97,6 +118,7 @@ def observe(
     threshold=None,
     quiet=None,
     workers: int = 0,
+    worker: str = "",
 ) -> bool:
     """Record this tick: the watcher reports FACTS, this module names them.
 
@@ -106,7 +128,14 @@ def observe(
     invent their own wording for the same state.
     """
     phase = phase_of(blind=blind, busy=busy, arming=arming, percent=percent, threshold=threshold)
-    detail = phrase(phase, quiet=quiet, percent=percent, threshold=threshold, workers=workers)
+    detail = phrase(
+        phase,
+        quiet=quiet,
+        percent=percent,
+        threshold=threshold,
+        workers=workers,
+        worker=worker,
+    )
     return write(project_dir, phase, detail, percent=percent)
 
 

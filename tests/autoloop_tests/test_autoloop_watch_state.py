@@ -46,6 +46,26 @@ class TestWhatItSays:
         assert "3 проц." in wstate.phrase(wstate.PHASE_BUSY, workers=3)
         assert "отменю" in wstate.phrase(wstate.PHASE_ARMING)
 
+    def test_the_waited_for_process_is_named(self):
+        """Замер: «1 проц.» отправил человека искать агента, которого нет, — и
+        так дважды за один прогон, пока ждали воркер индексатора графа."""
+        assert wstate.phrase(wstate.PHASE_BUSY, workers=1, worker="codebase-memory-mcp") == (
+            "жду фоновую работу: codebase-memory-mcp"
+        )
+
+    def test_several_processes_name_one_and_count_the_rest(self):
+        line = wstate.phrase(wstate.PHASE_BUSY, workers=3, worker="python")
+
+        assert "python" in line
+        assert "+2" in line
+
+    def test_a_long_name_does_not_stretch_the_plaque(self):
+        """NEGATIVE: плашка подгоняет ширину под текст, поэтому длинное имя
+        разъедет окно поверх чужих окон."""
+        line = wstate.phrase(wstate.PHASE_BUSY, workers=1, worker="x" * 80)
+
+        assert len(line) == len("жду фоновую работу: ") + wstate.MAX_WORKER_NAME
+
     def test_waiting_says_how_long_it_has_been_quiet(self):
         assert wstate.phrase(wstate.PHASE_WAITING, quiet=12.7) == "жду тишины · 12 с"
 

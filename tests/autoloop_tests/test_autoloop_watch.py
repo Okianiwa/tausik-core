@@ -202,6 +202,200 @@ class TestWorkStillRunningIsNotSilence:
         assert presence.own_pids(str(project_dir)) == set()
 
 
+class TestAHeartbeatIsNotWork:
+    """Measured in D:/asynchronus on 17.08.2026: the graph MCP server respawns
+    `codebase-memory-mcp cli --index-worker` every 54s and it burns 13s of CPU,
+    leaving 41s of silence against the 45s a cleanup needs. chat-watch.log shows
+    the whole evening as "фоновая работа: 1 процессов" -> "кончилась" -> again,
+    and the window sat between 30% and 75% without one cleanup. Both older
+    exclusions pass it: it is born fresh every time, and it really is busy."""
+
+    PERIOD, WORKING, FIRST_WAKE = 54.0, 13.0, 41.0  # from the log, in seconds
+    BOOT, QUIET_FROM = 1000.0, 4600.0  # chat born, then an hour later the turn ends
+    CHAT, SERVER, WORKER = 100, 200, 300
+    TABLE = {
+        CHAT: (1, "claude.exe"),
+        SERVER: (CHAT, "codebase-memory-mcp.exe"),
+        WORKER: (SERVER, "codebase-memory-mcp.exe"),
+    }
+
+    def ages(self, worker_born):
+        return {self.CHAT: self.BOOT, self.SERVER: self.BOOT + 1, self.WORKER: worker_born}.get
+
+    def selected(self, worker_born, quiet_since):
+        return presence.background_pids(
+            self.CHAT,
+            self.TABLE,
+            age_of=self.ages(worker_born),
+            grace=120,
+            quiet_since=quiet_since,
+        )
+
+    def test_a_process_born_deep_into_the_silence_is_nobody_s_work(self):
+        """41 seconds after the last write nobody was there to ask for it."""
+        born = self.QUIET_FROM + self.FIRST_WAKE
+
+        assert self.selected(born, self.QUIET_FROM) == set()
+
+    def test_a_process_born_while_the_turn_ran_is_work(self):
+        """The other side of the same line: the tool call is written to the
+        transcript before the process spawns, so real work is always born on
+        this side of it."""
+        born = self.QUIET_FROM - 30
+
+        assert self.selected(born, self.QUIET_FROM) == {self.WORKER}
+
+    def test_an_unreadable_transcript_does_not_prune_anything(self):
+        """NEGATIVE: with no idea when the turn ended, a birth time proves
+        nothing. Pruning on a guess would clean over a live agent; refusing
+        costs one window, and the watcher will not clean while blind anyway."""
+        born = self.QUIET_FROM + self.FIRST_WAKE
+
+        assert self.selected(born, None) == {self.WORKER}
+
+    def test_a_child_of_the_agents_own_job_still_counts(self):
+        """NEGATIVE: `gradlew build` started in the turn spawns its daemon well
+        into the silence. The daemon inherits legitimacy through its parent —
+        otherwise the cleanup lands in the middle of a build."""
+        table = {100: (1, "claude.exe"), 200: (100, "bash.exe"), 300: (200, "java.exe")}
+        ages = {100: self.BOOT, 200: self.QUIET_FROM - 20, 300: self.QUIET_FROM + 30}
+
+        work = presence.background_pids(
+            100, table, age_of=ages.get, grace=120, quiet_since=self.QUIET_FROM
+        )
+
+        assert work == {200, 300}
+
+    def test_an_unreadable_age_is_still_not_work(self):
+        """NEGATIVE: the direction `started_at` already takes must survive the
+        new filter — blocking forever on something unreadable is worse than a
+        cleanup that happens."""
+        table = {100: (1, "claude.exe"), 200: (100, "python.exe")}
+
+        work = presence.background_pids(
+            100, table, age_of={100: self.BOOT}.get, grace=120, quiet_since=self.QUIET_FROM
+        )
+
+        assert work == set()
+
+    def cadence(self, quiet_since):
+        """Five minutes of 2s ticks over the measured cadence.
+
+        Scaffolding replicates only the ORDER of the watcher's tick; both
+        decisions in it are the production ones. `busy` skips `busy_pids`
+        because the measurement settled that question — the worker burns 13s of
+        real CPU, so the CPU check counts it whenever it is selected at all.
+        """
+        busy_since, quietest, acted = None, 0.0, None
+        for tick in range(0, 300, 2):
+            now = self.QUIET_FROM + tick
+            since_wake = (tick - self.FIRST_WAKE) % self.PERIOD if tick >= self.FIRST_WAKE else None
+            alive = since_wake is not None and since_wake < self.WORKING
+            table = self.TABLE if alive else {
+                pid: entry for pid, entry in self.TABLE.items() if pid != self.WORKER
+            }
+            work = presence.background_pids(
+                self.CHAT,
+                table,
+                age_of=self.ages(now - since_wake if alive else None),
+                grace=120,
+                quiet_since=quiet_since,
+            )
+            busy = bool(work)
+            if busy:
+                busy_since = now
+            quiet = watch.quiet_after_work(float(tick), now, busy_since)
+            quietest = max(quietest, quiet)
+            if acted is None and watch.should_act(35, 30, quiet, busy=busy, hard=75):
+                acted = tick
+        return acted, quietest
+
+    def test_the_defect_it_answers_the_cleanup_could_never_come(self):
+        """NEGATIVE, and the reason this class exists: on the old selection the
+        silence has a ceiling of one gap between wake-ups. 41s < 45s, so the
+        answer is never — not slow, never."""
+        acted, quietest = self.cadence(quiet_since=None)
+
+        assert acted is None
+        assert quietest == pytest.approx(self.FIRST_WAKE, abs=2)
+
+    def test_the_cleanup_happens_on_the_measured_cadence(self):
+        """The fix, on the numbers from the log: with the heartbeat out of the
+        count nothing resets the clock, so the silence grows past 45s."""
+        acted, quietest = self.cadence(quiet_since=self.QUIET_FROM)
+
+        assert acted is not None and acted <= 46
+        assert quietest > watch.IDLE_SECONDS
+
+
+class TestTheWaitIsNamed:
+    """«1 проц.» sent the human hunting for an agent that did not exist, twice
+    in one run, while the answer was the graph server's own index worker."""
+
+    def test_the_lowest_pid_names_the_wait(self):
+        table = {300: (200, "java.exe"), 400: (200, "codebase-memory-mcp.exe")}
+
+        assert presence.worker_name({400, 300}, table) == "java"
+
+    def test_the_extension_is_noise(self):
+        assert presence.worker_name({400}, {400: (200, "codebase-memory-mcp.exe")}) == "codebase-memory-mcp"
+
+    def test_no_work_has_no_name(self):
+        assert presence.worker_name(set(), {400: (200, "python.exe")}) == ""
+
+    def test_a_pid_missing_from_the_table_has_no_name(self):
+        """NEGATIVE: the snapshot and the busy set are taken a moment apart, so
+        a process can die in between. That is a nameless wait, not a crash in
+        the watcher's loop."""
+        assert presence.worker_name({999}, {400: (200, "python.exe")}) == ""
+
+
+class TestTheAnchor:
+    """The other half of the same defect: rules fade out of a context nobody
+    refreshed. A run that stalled between steps waits for a human who is away —
+    that is why the run was declared. The nudge re-reads nothing and frees no
+    window; it hands the direction back."""
+
+    LONG = watch.ANCHOR_SECONDS + 1
+
+    def due(self, **over):
+        args = {"busy": False, "arming": False, "wasted": 0}
+        args.update(over)
+        return watch.anchor_due(self.LONG, 0.0, 600.0, **args)
+
+    def test_a_stalled_run_gets_its_direction_back(self):
+        assert self.due() is True
+
+    def test_nothing_happens_before_the_gap(self):
+        assert watch.anchor_due(60.0, 0.0, 600.0, busy=False, arming=False, wasted=0) is False
+
+    def test_a_working_run_is_not_nudged(self):
+        """NEGATIVE: the transcript is silent while a job the agent started
+        runs. A nudge there lands on an agent mid-step."""
+        assert self.due(busy=True) is False
+
+    def test_an_armed_cleanup_outranks_the_nudge(self):
+        """NEGATIVE: the cleanup re-anchors AND frees the window, which is
+        strictly more. Two commands typed into the same countdown is the bug
+        this ordering avoids."""
+        assert self.due(arming=True) is False
+
+    def test_a_live_conversation_is_never_interrupted(self):
+        """The same 45 seconds that guard the cleanup guard this."""
+        assert watch.anchor_due(self.LONG, 0.0, 5.0, busy=False, arming=False, wasted=0) is False
+
+    def test_an_unknown_quiet_never_nudges(self):
+        """NEGATIVE: an unreadable transcript is not an empty room — the same
+        answer `should_act` gives."""
+        assert watch.anchor_due(self.LONG, 0.0, None, busy=False, arming=False, wasted=0) is False
+
+    def test_three_nudges_that_moved_nothing_end_it(self):
+        """NEGATIVE: silence can mean finished, not stalled. A mechanism typing
+        into an empty queue until morning is worse than one that stops."""
+        assert self.due(wasted=watch.ANCHOR_TRIES) is False
+        assert self.due(wasted=watch.ANCHOR_TRIES - 1) is True
+
+
 def test_an_unknown_quiet_never_acts():
     """AC negative: the full window is real, the empty room is a guess."""
     assert watch.should_act(99, threshold=30, quiet_for=None) is False

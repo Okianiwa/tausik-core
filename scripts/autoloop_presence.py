@@ -414,6 +414,38 @@ def cpu_time(pid: int) -> float | None:
 
 # A process that came up with the chat is part of its furniture, not its work.
 BOOT_GRACE_SECONDS = 120.0
+# How long after the transcript's last write a process may still be born and
+# count as work the agent started. The tool call is written to the transcript
+# BEFORE the process spawns, so the legitimate gap is about a second; measured
+# heartbeats wake tens of seconds into the silence (54s period, see
+# `_started_in_a_turn`). Anything between those two numbers separates them.
+TURN_GRACE_SECONDS = 15.0
+
+
+def _started_in_a_turn(pid, cutoff, fresh, born_at, table, chat_pid) -> bool:
+    """Whether this process traces back to work started while the chat was live.
+
+    Answers the case parentage alone must NOT answer. Pruning every subtree that
+    hangs off a boot-era process was tried and rejected — it would blind the
+    counter to `mcp__windows-mcp__PowerShell`, which starts real work under its
+    own server. Here parentage only lets a child INHERIT legitimacy that a
+    parent already earned by its birth time; it can never take legitimacy away.
+
+    A parent that has already exited answers False. That is the same direction
+    `started_at` and `busy_pids` take: an unprovable process is not proven to be
+    work, and blocking the cleanup forever is the worse failure.
+    """
+    seen = set()
+    current = pid
+    while current and current != chat_pid and current not in seen:
+        seen.add(current)
+        if current in fresh and born_at.get(current, cutoff + 1) <= cutoff:
+            return True
+        entry = table.get(current)
+        if entry is None:
+            return False
+        current = entry[0] if isinstance(entry, (tuple, list)) else entry
+    return False
 
 
 def background_pids(
@@ -422,10 +454,12 @@ def background_pids(
     own: set[int] | None = None,
     age_of=None,
     grace: float = BOOT_GRACE_SECONDS,
+    quiet_since: float | None = None,
+    turn_grace: float = TURN_GRACE_SECONDS,
 ) -> set[int]:
     """Work the agent STARTED, as opposed to everything hanging off the chat.
 
-    Two exclusions, both learned by measuring a real chat rather than guessing:
+    Three exclusions, all learned by measuring a real chat rather than guessing:
 
     * the mechanism's own processes — watcher, overlay, dashboard — by
       REGISTERED pid, because a name check cannot tell `python overlay` from
@@ -434,7 +468,20 @@ def background_pids(
       descendants: every MCP server, all aged exactly as the chat (143 min),
       against a background command aged 0. Counting those as work would mean
       the window is never quiet and never cleaned — worse than the defect this
-      answers.
+      answers;
+    * heartbeats of the tooling, via `quiet_since` — the wall clock of the
+      transcript's last write. Measured in D:/asynchronus: the graph server
+      respawns `codebase-memory-mcp cli --index-worker` every 54s and it burns
+      13s of CPU, leaving 41s of silence against the 45s the cleanup needs. Born
+      fresh every time and genuinely busy, it passes both exclusions above, so
+      the window sat between 30% and 75% all evening and was never cleaned. The
+      criterion that separates it: work the agent started is always born BEFORE
+      the transcript stops moving, because the turn keeps writing after the
+      spawn. A process born deep into the silence was requested by nobody.
+
+    `quiet_since=None` means the transcript could not be read, and then this
+    filter does not run at all: an unreadable chat is not evidence about who
+    started what, and the caller already refuses to clean while blind.
 
     A process whose start time cannot be read is NOT counted as work: the
     conservative direction here is to let a cleanup happen, not to block it
@@ -447,12 +494,21 @@ def background_pids(
     chat_started = age_of(chat_pid)
     if chat_started is None:
         return kids  # unknown chat age: fall back to "everything under it counts"
-    fresh = set()
+    fresh: set[int] = set()
+    born_at: dict[int, float] = {}
     for pid in kids:
         born = age_of(pid)
         if born is not None and born > chat_started + grace:
             fresh.add(pid)
-    return fresh
+            born_at[pid] = born
+    if quiet_since is None:
+        return fresh
+    cutoff = quiet_since + turn_grace
+    return {
+        pid
+        for pid in fresh
+        if _started_in_a_turn(pid, cutoff, fresh, born_at, table, chat_pid)
+    }
 
 
 def busy_pids(
@@ -507,3 +563,17 @@ def busy_pids(
         if pid in seen and current > seen[pid]:
             working.add(pid)
     return working, snapshot
+
+
+def worker_name(pids, table: dict) -> str:
+    """The name to show for the work being waited on, or "" when there is none.
+
+    The lowest pid rather than an arbitrary one, so the plaque does not rename
+    the same wait every tick. The extension goes: `.exe` is noise in a line that
+    has to fit next to a percentage.
+    """
+    if not pids:
+        return ""
+    entry = table.get(min(pids))
+    name = entry[1] if isinstance(entry, (tuple, list)) and len(entry) > 1 else ""
+    return name[:-4] if name.endswith(".exe") else name

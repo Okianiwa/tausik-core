@@ -39,6 +39,7 @@ from autoloop_presence import (
     register_own,
     transcript_path,
     transcript_size,
+    worker_name,
 )
 from autoloop.state import load_config
 from autoloop_chat_cycle import (
@@ -49,6 +50,7 @@ from autoloop_chat_cycle import (
     clear_ready,
     clear_started,
     confirm,
+    continue_step,
     WAIT_SPEAKING,
     draft_changed,
     needs_maintenance,
@@ -66,6 +68,14 @@ STOP_FILE = os.path.join(".tausik", ".chat-watch.stop")
 IDLE_SECONDS = 45.0  # quiet before the chat counts as "not in use right now"
 POLL_SECONDS = 2.0
 ESC = "\x1b"
+# A run that stopped between steps waits for nobody: the human is away, that is
+# why the run was declared. 20 minutes is long enough to sit out a real step and
+# short enough that a stall does not cost the night.
+ANCHOR_SECONDS = 1200.0
+# And it gives up. Three deliveries that moved nothing mean the chat is not
+# stalled but finished, and a mechanism typing into an empty queue forever is
+# worse than one that stops and says so.
+ANCHOR_TRIES = 3
 
 
 def log(project_dir: str, message: str) -> None:
@@ -95,6 +105,56 @@ def should_act(
     if busy and (hard is None or percent is None or percent < hard):
         return False
     return True
+
+
+def quiet_after_work(quiet, now, busy_since):
+    """Silence measured from the end of the WORK, not just of the transcript.
+
+    The transcript stood still for the whole job; counting that as quiet would
+    clean the moment it exits, before the result is read.
+
+    The same arithmetic is why a periodic worker was able to block the cleanup
+    for good: reset on every busy tick, this can never exceed the gap between
+    two wake-ups. Measured at 41s against the 45s required — which is a defect
+    of the SELECTION (see `background_pids`), not of this cap.
+    """
+    if busy_since is None or quiet is None:
+        return quiet
+    return min(quiet, now - busy_since)
+
+
+def anchor_due(
+    now,
+    last_at,
+    quiet,
+    *,
+    busy: bool,
+    arming: bool,
+    wasted: int,
+    gap: float = ANCHOR_SECONDS,
+    tries: int = ANCHOR_TRIES,
+) -> bool:
+    """Whether the run should be handed its direction again.
+
+    This is not a cleanup and cannot replace one: it re-reads nothing and frees
+    no window. It answers the other half of the same defect — a chat that sat
+    still long enough for its own rules to fade out of the context it kept.
+
+    Every condition here is a way of NOT talking over somebody: work in flight
+    is left alone, an armed cleanup outranks a nudge (it re-anchors and clears,
+    which is strictly more), and the same 45 seconds that guard the cleanup
+    guard this.
+
+    The quiet here is the whole transcript's, NOT `human_idle_seconds`. The
+    cancel path wants the human's clock, because the agent's own steps are not
+    somebody walking in; this one wants the opposite — those steps are the proof
+    the run is alive, and a nudge delivered over them is the interruption.
+    """
+    if wasted >= tries or busy or arming:
+        return False
+    if quiet is None or quiet < IDLE_SECONDS:
+        return False
+    return (now - last_at) >= gap
 
 
 def chat_pid(exclude=()) -> int | None:
@@ -250,6 +310,7 @@ def watch(
     clear_ready(project_dir)
 
     blind, armed_screen, deferred = False, None, False
+    anchor_at, anchor_size, anchor_wasted = time.monotonic(), transcript_size(project_dir), 0
     busy, busy_since = False, None
     cpu_seen: dict[int, float] = {}  # last tick's CPU per pid — the busy/idle baseline
     try:
@@ -271,22 +332,29 @@ def watch(
             # Two questions, not one: what the agent STARTED, then which of it
             # is actually running. A lazily-started language server answers yes
             # to the first forever and no to the second — see `busy_pids`.
-            started = background_pids(pid, keys.process_table(), own)
+            # A heartbeat of the tooling is not work the agent asked for: the
+            # transcript's last write says which side of the turn it was born on.
+            table = keys.process_table()
+            started = background_pids(
+                pid,
+                table,
+                own,
+                quiet_since=None if quiet is None else time.time() - quiet,
+            )
             working, cpu_seen = busy_pids(started, cpu_seen)
             if bool(working) != busy:
                 busy = bool(working)
                 log(
                     project_dir,
-                    f"фоновая работа: {len(working)} процессов, уборка ждёт"
+                    f"фоновая работа: {len(working)} процессов "
+                    f"({worker_name(working, table)}), уборка ждёт"
                     if busy
                     else "фоновая работа кончилась, отсчёт тишины заново",
                 )
             if busy:
                 busy_since = now
-            elif busy_since is not None and quiet is not None:
-                # The transcript stood still for the whole job; counting that as
-                # quiet would clean the moment it exits, before the result is read.
-                quiet = min(quiet, now - busy_since)
+            else:
+                quiet = quiet_after_work(quiet, now, busy_since)
             # Said once, and again only when it changes. This is the state in
             # which the watcher does nothing at all, and a watcher that does
             # nothing silently is indistinguishable from a working one.
@@ -311,6 +379,7 @@ def watch(
                 threshold=threshold,
                 quiet=quiet,
                 workers=len(working),
+                worker=worker_name(working, table),
             )
 
             # A cleanup that was asked for. It goes straight to the sequence:
@@ -364,6 +433,28 @@ def watch(
                 else:
                     run_sequence(project_dir, pid, cycle)
                 armed_screen = None
+            direction = run_direction(project_dir)
+            if direction and anchor_due(
+                now,
+                anchor_at,
+                quiet,
+                busy=busy,
+                arming=cycle.state != "idle",
+                wasted=anchor_wasted,
+            ):
+                # Did the PREVIOUS anchor produce anything? The transcript is the
+                # only honest answer: a nudge that moved no text moved no work.
+                size = transcript_size(project_dir)
+                anchor_wasted = anchor_wasted + 1 if size == anchor_size else 0
+                if anchor_wasted >= ANCHOR_TRIES:
+                    log(project_dir, "якорь не поднял прогон трижды — чат больше не трогаю")
+                else:
+                    sent, reason = deliver(project_dir, pid, *continue_step(direction))
+                    log(
+                        project_dir,
+                        "якорь: вернул чат к работе" if sent else f"якорь не прошёл: {reason}",
+                    )
+                anchor_at, anchor_size = time.monotonic(), transcript_size(project_dir)
             time.sleep(POLL_SECONDS)
     finally:
         release_lock(project_dir)
