@@ -45,7 +45,11 @@ STATE_COMPLETE = "complete"
 STATE_IN_PROGRESS = "in_progress"
 STATE_IDLE = "idle"
 
-DEFAULT_SOFT_THRESHOLD = 30.0
+DEFAULT_SOFT_THRESHOLD = 50.0
+# How long a declared run may stand still before it is handed its direction
+# again. Was hard-wired at 1200s; a stalled run waited out twenty minutes of
+# a night nobody was watching, which is the opposite of why the run exists.
+DEFAULT_ANCHOR_SECONDS = 600.0
 DEFAULT_HARD_THRESHOLD = 75.0
 
 
@@ -113,6 +117,7 @@ def load_config(project_dir: str) -> dict:
         "context_window": int(_number("context_window", 1_000_000)),
         "soft_threshold": _number("soft_threshold", DEFAULT_SOFT_THRESHOLD),
         "hard_threshold": _number("hard_threshold", DEFAULT_HARD_THRESHOLD),
+        "anchor_seconds": _number("anchor_seconds", DEFAULT_ANCHOR_SECONDS),
         "max_iterations": int(_number("max_iterations", 20)),
         "max_idle_iterations": int(_number("max_idle_iterations", 3)),
         "max_crash_streak": int(_number("max_crash_streak", 2)),

@@ -138,7 +138,7 @@ def test_only_the_tail_is_read(transcript):
 # --- что из этого делает наблюдатель ---------------------------------------
 
 
-def spin(monkeypatch, project_dir, *, human_quiet, ticks=3):
+def spin(monkeypatch, project_dir, *, human_quiet, ticks=4):
     """Прокрутить цикл наблюдателя с полным окном и молчащим файлом.
 
     Меняется одно: сколько молчит ЧЕЛОВЕК. Всё остальное — окно на 99%, тишина
@@ -147,7 +147,7 @@ def spin(monkeypatch, project_dir, *, human_quiet, ticks=3):
     import autoloop_chat_cycle as cycle_state
     import autoloop_watch as watch
 
-    clock = iter([0.0, 10.0, 20.0, 30.0])
+    clock = iter([0.0, 10.0, 20.0, 30.0, 40.0, 50.0])
     beats = iter([True] * ticks + [False])
     ran = []
     cycle_state.start_run(str(project_dir), "очередь задач")
@@ -161,6 +161,10 @@ def spin(monkeypatch, project_dir, *, human_quiet, ticks=3):
     monkeypatch.setattr(watch.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(watch.time, "sleep", lambda _s: None)
     monkeypatch.setattr(watch, "run_sequence", lambda *_a: ran.append("sequence") or True)
+    # Свёртка: просьба подаётся клавишами, а окно вытирается только когда
+    # прогон встал. Здесь закреплено и то и другое — эти тесты про другое.
+    monkeypatch.setattr(watch, "deliver", lambda *_a: (True, ""))
+    monkeypatch.setattr(watch, "standing_seconds", lambda *_a, **_k: 600.0)
     watch.watch(str(project_dir), pid=111, threshold=30)
     return ran, (project_dir / ".tausik" / "chat-watch.log").read_text(encoding="utf-8")
 

@@ -126,3 +126,72 @@ class TestSayingNothing:
 
         assert wstate.read(str(project_dir)) is None
         assert not (project_dir / ".tausik" / ".chat-watch.state.json").exists()
+
+
+class TestARefusalThatIsStillHolding:
+    """Плашка после отказа читалась как «жду тишины · 695 с», и человек понял
+    её буквально: наблюдатель ждёт паузы, которая уже одиннадцать минут как
+    наступила. Он отсиживал запрет, и на экране этого не было сказано."""
+
+    def test_a_holding_refusal_is_not_waiting_for_silence(self):
+        phase = wstate.phase_of(
+            blind=False, busy=False, arming=False, percent=42, threshold=30, cooling=695.0
+        )
+
+        assert phase == wstate.PHASE_COOLING
+
+    def test_it_says_how_long_is_left(self):
+        said = wstate.phrase(wstate.PHASE_COOLING, cooling=695.4)
+
+        assert "695" in said and "отменили" in said
+
+    def test_a_spent_refusal_goes_back_to_waiting(self):
+        """НЕГАТИВНЫЙ: остывание кончилось — состояние обычное, иначе плашка
+        соврёт в другую сторону и уборка будет выглядеть запрещённой всегда."""
+        phase = wstate.phase_of(
+            blind=False, busy=False, arming=False, percent=42, threshold=30, cooling=0.0
+        )
+
+        assert phase == wstate.PHASE_WAITING
+
+    def test_the_countdown_outranks_the_refusal(self):
+        """Взведённая уборка важнее: она уже идёт, а запрет — то, что было."""
+        phase = wstate.phase_of(
+            blind=False, busy=False, arming=True, percent=42, threshold=30, cooling=600.0
+        )
+
+        assert phase == wstate.PHASE_ARMING
+
+
+class TestTheWindDown:
+    """AC-6: между отсчётом и уборкой появилось состояние, в котором прогон
+    просят свернуть задачу. «Взвожу уборку» тут сказало бы обратное тому, что
+    происходит: просьба уже подана, отсчёт кончился."""
+
+    def test_winding_outranks_the_countdown(self):
+        phase = wstate.phase_of(
+            blind=False, busy=False, arming=True, percent=60, threshold=50, winding=True
+        )
+
+        assert phase == wstate.PHASE_WINDING
+
+    def test_it_says_what_it_is_waiting_for(self):
+        said = wstate.phrase(wstate.PHASE_WINDING)
+
+        assert "свернуть задачу" in said and "встанет" in said
+
+    def test_the_run_working_on_the_wind_down_is_not_a_reason_to_hide_it(self):
+        """НЕГАТИВНЫЙ: свёртка — это и есть работа агента, поэтому «жду фоновую
+        работу» перекрыло бы состояние ровно тогда, когда оно интересно."""
+        phase = wstate.phase_of(
+            blind=False, busy=True, arming=False, percent=60, threshold=50, winding=True
+        )
+
+        assert phase == wstate.PHASE_WINDING
+
+    def test_blindness_still_outranks_it(self):
+        phase = wstate.phase_of(
+            blind=True, busy=False, arming=False, percent=60, threshold=50, winding=True
+        )
+
+        assert phase == wstate.PHASE_BLIND

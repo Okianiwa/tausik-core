@@ -924,10 +924,10 @@ def test_a_project_with_no_transcript_folder_says_so(tmp_path, monkeypatch):
 # --- the last look before typing -------------------------------------------
 
 
-def spin_watch(monkeypatch, project_dir, screens, ticks=3, quiet=600.0):
+def spin_watch(monkeypatch, project_dir, screens, ticks=4, quiet=600.0, said=None):
     """Run the loop for a few ticks with everything but the draft check fixed:
     the window is full, the transcript is quiet, the chat is alive."""
-    clock = iter([0.0, 10.0, 20.0, 30.0])
+    clock = iter([0.0, 10.0, 20.0, 30.0, 40.0, 50.0])
     beats = iter([True] * ticks + [False])
     ran = []
     cycle_state.start_run(str(project_dir), "очередь задач")
@@ -944,6 +944,15 @@ def spin_watch(monkeypatch, project_dir, screens, ticks=3, quiet=600.0):
     monkeypatch.setattr(watch.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(watch.time, "sleep", lambda _s: None)
     monkeypatch.setattr(watch, "run_sequence", lambda *_a: ran.append("sequence") or True)
+    # Свёртка: просьба подаётся клавишами, а окно вытирается только когда
+    # прогон встал. Здесь закреплено и то и другое — эти тесты про другое.
+    monkeypatch.setattr(
+        watch, "deliver", lambda _p, _pid, command, _trace: (
+            said.append(command) if said is not None else None,
+            (True, ""),
+        )[1]
+    )
+    monkeypatch.setattr(watch, "standing_seconds", lambda *_a, **_k: 600.0)
     watch.watch(str(project_dir), pid=111, threshold=30)
     return ran, (project_dir / ".tausik" / "chat-watch.log").read_text(encoding="utf-8")
 
@@ -1191,3 +1200,62 @@ class TestStopInterruptsTheCycle:
 
         assert watch.take_lock(str(project_dir)) is True
         assert lock.read_text(encoding="utf-8").strip() != "999999999"
+
+
+def test_the_run_is_asked_to_wind_down_before_the_window_is_wiped(project_dir, monkeypatch):
+    """AC-1: уборка больше не падает в первую попавшуюся 45-секундную паузу.
+    Сначала прогон просят довести задачу до конца, и только когда он встал —
+    вытирают окно. Раньше он о заполнении контекста вообще не знал."""
+    said = []
+    ran, journal = spin_watch(monkeypatch, project_dir, iter(["> ", "> "]), said=said)
+
+    assert ran == ["sequence"]
+    assert said and "Новую задачу не начинай" in said[0]
+    assert journal.index("просил свернуть задачу") < journal.index("убираю окно")
+
+
+def test_the_window_is_not_wiped_in_the_same_breath_as_the_request(project_dir, monkeypatch):
+    """AC negative: тишина, по которой взводилась уборка, измерена ДО того, как
+    просьбу напечатали. Судить по ней здесь — значит вытереть окно, не дав
+    просьбе быть прочитанной."""
+    said = []
+    ran, _journal = spin_watch(monkeypatch, project_dir, iter(["> ", "> "]), ticks=3, said=said)
+
+    assert said, "просьба свернуться не подавалась"
+    assert ran == [], "окно вытерли на том же тике, что и попросили свернуться"
+
+
+class TestAShorterAnchorKeepsEveryGuard:
+    """AC-4: интервал сократился вдвое, и это единственное, что изменилось.
+    Каждое условие в anchor_due — способ не заговорить поверх кого-то, и
+    короткий интервал делает их важнее, а не менее важными."""
+
+    GAP = 600.0
+    PAST = GAP + 1
+
+    def due(self, **over):
+        args = {"busy": False, "arming": False, "wasted": 0, "gap": self.GAP}
+        args.update(over)
+        return watch.anchor_due(self.PAST, 0.0, self.PAST, **args)
+
+    def test_the_shorter_interval_does_fire(self):
+        assert self.due() is True
+
+    def test_work_in_flight_is_still_left_alone(self):
+        assert self.due(busy=True) is False
+
+    def test_an_armed_cleanup_still_outranks_the_nudge(self):
+        """Уборка перевзводит И освобождает окно — строго больше."""
+        assert self.due(arming=True) is False
+
+    def test_a_turn_still_running_is_still_not_a_standing_run(self):
+        assert watch.anchor_due(self.PAST, 0.0, None, busy=False, arming=False,
+                                wasted=0, gap=self.GAP) is False
+
+    def test_it_still_gives_up_after_three_dead_deliveries(self):
+        """Иначе чат, который закончил, получает подачу каждые десять минут."""
+        assert self.due(wasted=watch.ANCHOR_TRIES) is False
+
+    def test_it_does_not_fire_before_the_interval(self):
+        assert watch.anchor_due(self.GAP - 1, 0.0, self.GAP - 1, busy=False,
+                                arming=False, wasted=0, gap=self.GAP) is False

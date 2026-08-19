@@ -50,7 +50,6 @@ from autoloop_chat_cycle import (
     clear_ready,
     clear_started,
     confirm,
-    continue_step,
     WAIT_SPEAKING,
     draft_changed,
     needs_maintenance,
@@ -59,6 +58,9 @@ from autoloop_chat_cycle import (
     sequence,
     turn_ended_at,
     wait_ready,
+    wind_down_step,
+    anchor_step,
+    STATE_WINDING,
 )
 
 LOG_FILE = os.path.join(".tausik", "chat-watch.log")
@@ -70,9 +72,10 @@ IDLE_SECONDS = 45.0  # quiet before the chat counts as "not in use right now"
 POLL_SECONDS = 2.0
 ESC = "\x1b"
 # A run that stopped between steps waits for nobody: the human is away, that is
-# why the run was declared. 20 minutes is long enough to sit out a real step and
-# short enough that a stall does not cost the night.
-ANCHOR_SECONDS = 1200.0
+# why the run was declared. Ten minutes is long enough to sit out a real step —
+# every guard in `anchor_due` still has to agree — and short enough that a stall
+# does not cost the night. Overridable per project: autoloop.anchor_seconds.
+ANCHOR_SECONDS = 600.0
 # And it gives up. Three deliveries that moved nothing mean the chat is not
 # stalled but finished, and a mechanism typing into an empty queue forever is
 # worse than one that stops and says so.
@@ -269,21 +272,21 @@ def run_sequence(project_dir: str, pid: int, cycle: Maintenance) -> bool:
         log(project_dir, f"сессия исчерпана ({spent}) — в цикл добавлен /end")
     if not wait_ready(project_dir, cycle.ready_timeout):
         log(project_dir, f"отменено: чат не освободился перед {steps[0][0]}")
-        cycle.awaiting_drop = True
+        cycle.finish()
         return False
     for command, trace in steps:
         halt = stopping(project_dir)
         if halt:
             log(project_dir, f"{halt}; цикл уборки прерван перед {command}")
-            cycle.awaiting_drop = True
+            cycle.finish()
             return False
         sent, reason = deliver(project_dir, pid, command, trace)
         if not sent:
             log(project_dir, f"{command} не прошёл: {reason}")
-            cycle.awaiting_drop = True
+            cycle.finish()
             return False
         log(project_dir, f"{command} выполнен")
-    cycle.awaiting_drop = True
+    cycle.finish()
     return True
 
 
@@ -331,6 +334,7 @@ def watch(
 
     config = load_config(project_dir)
     threshold = threshold if threshold is not None else config["soft_threshold"]
+    anchor_gap = config["anchor_seconds"]
     cycle = Maintenance(threshold=threshold)
     register_own(project_dir)  # a descendant of the chat: else it waits for itself
     log(project_dir, f"старт: pid={pid}, порог {threshold}%")
@@ -404,11 +408,13 @@ def watch(
                 blind=blind,
                 busy=busy,
                 arming=cycle.state != "idle",
+                winding=cycle.state == STATE_WINDING,
                 percent=percent,
                 threshold=threshold,
                 quiet=quiet,
                 workers=len(working),
                 worker=worker_name(working, table),
+                cooling=cycle.cooling_for(now),
             )
 
             # A cleanup that was asked for. It goes straight to the sequence:
@@ -449,7 +455,14 @@ def watch(
                 # "человек вернулся в чат" with nobody in the room, and cost
                 # ten minutes of cooldown on a full window.
                 human_quiet = human_idle_seconds(path)
-                if (human_quiet is None or human_quiet < IDLE_SECONDS) and cycle.cancel(now=now):
+                human_at = None if human_quiet is None else now_wall - human_quiet
+                # The wind-down request is typed INTO the chat, so it lands as a
+                # turn from the human and would cancel the cleanup that sent it.
+                if (
+                    not cycle.echo_of_us(human_at)
+                    and (human_quiet is None or human_quiet < IDLE_SECONDS)
+                    and cycle.cancel(now=now)
+                ):
                     # Someone started talking during the countdown; their turn wins.
                     log(project_dir, "отменено: человек вернулся в чат")
             if cycle.due(now):
@@ -460,8 +473,40 @@ def watch(
                     cycle.cancel(now=now)
                     log(project_dir, "отменено: экран чата изменился — человек печатает")
                 else:
-                    run_sequence(project_dir, pid, cycle)
+                    typed_at = time.time()  # before the keys: `deliver` waits for an answer
+                    sent, reason = deliver(
+                        project_dir, pid, *wind_down_step(run_direction(project_dir))
+                    )
+                    cycle.wind(now, typed_at)
+                    log(
+                        project_dir,
+                        "просил свернуть задачу — жду, пока прогон встанет"
+                        if sent
+                        else f"просьба свернуться не прошла ({reason}) — жду всё равно",
+                    )
+                    # Next tick, not this one. The silence measured above was
+                    # taken BEFORE the request was typed, so judging by it here
+                    # would wipe the window in the same breath as asking the run
+                    # to wind down — the request would never have been read.
+                    armed_screen = None
+                    time.sleep(POLL_SECONDS)
+                    continue
                 armed_screen = None
+            # The wipe itself, once the run has actually stopped. Asked of the
+            # Stop hook's flag rather than of the transcript: a quiet transcript
+            # means the turn ended, not the work.
+            if cycle.wound_up(
+                standing_seconds(turn_ended_at(project_dir), last_write, now_wall),
+                now,
+                busy=busy,
+            ):
+                log(
+                    project_dir,
+                    "задача не свернулась за отведённое время — убираю всё равно"
+                    if cycle.timed_out(now)
+                    else "прогон встал — убираю окно",
+                )
+                run_sequence(project_dir, pid, cycle)
             direction = run_direction(project_dir)
             if direction and anchor_due(
                 now,
@@ -470,6 +515,7 @@ def watch(
                 busy=busy,
                 arming=cycle.state != "idle",
                 wasted=anchor_wasted,
+                gap=anchor_gap,
             ):
                 # Did the PREVIOUS anchor produce anything? The transcript is the
                 # only honest answer: a nudge that moved no text moved no work.
@@ -478,7 +524,7 @@ def watch(
                 if anchor_wasted >= ANCHOR_TRIES:
                     log(project_dir, "якорь не поднял прогон трижды — чат больше не трогаю")
                 else:
-                    sent, reason = deliver(project_dir, pid, *continue_step(direction))
+                    sent, reason = deliver(project_dir, pid, *anchor_step(direction))
                     log(
                         project_dir,
                         "якорь: вернул чат к работе" if sent else f"якорь не прошёл: {reason}",

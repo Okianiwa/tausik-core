@@ -36,21 +36,47 @@ PHASE_WATCHING = "watching"
 MAX_WORKER_NAME = 22
 
 
-def phase_of(*, blind: bool, busy: bool, arming: bool, percent=None, threshold=None) -> str:
+PHASE_COOLING = "cooling"  # over the threshold, but a refusal is still holding
+PHASE_WINDING = "winding"  # the run was asked to finish up; the wipe waits for it
+
+
+def phase_of(
+    *,
+    blind: bool,
+    busy: bool,
+    arming: bool,
+    percent=None,
+    threshold=None,
+    cooling: float = 0.0,
+    winding: bool = False,
+) -> str:
     """Which state the watcher is in, in priority order.
 
     Blindness first: it outranks everything because in that state nothing else
     the watcher believes is worth acting on. Then the two reasons a cleanup is
-    NOT happening (work in flight, countdown already running), then whether the
-    window is over the threshold at all.
+    NOT happening (work in flight, countdown already running), then the third —
+    a refusal still holding — and only then whether the window is over the
+    threshold at all.
+
+    Winding outranks arming because it is the later half of the same countdown:
+    the request to finish up has already gone, and «взвожу уборку» would say
+    the opposite of what is happening.
+
+    Cooling ranks below both because it is what «waiting» used to be mistaken
+    for: over the threshold, quiet, and still not cleaning.
     """
     if blind:
         return PHASE_BLIND
-    if busy:
+    if busy and not winding:
         return PHASE_BUSY
+    if winding:
+        return PHASE_WINDING
     if arming:
         return PHASE_ARMING
-    if percent is not None and threshold is not None and percent >= threshold:
+    over = percent is not None and threshold is not None and percent >= threshold
+    if over and cooling > 0:
+        return PHASE_COOLING
+    if over:
         return PHASE_WAITING
     return PHASE_WATCHING
 
@@ -63,6 +89,7 @@ def phrase(
     threshold=None,
     workers: int = 0,
     worker: str = "",
+    cooling: float = 0.0,
 ) -> str:
     """One line for a small window: what is happening and what it is waiting for.
 
@@ -85,6 +112,10 @@ def phrase(
         return f"жду фоновую работу · {workers} проц." if workers else "жду фоновую работу"
     if phase == PHASE_ARMING:
         return "взвожу уборку — говори, и отменю"
+    if phase == PHASE_WINDING:
+        return "просил свернуть задачу — жду, пока прогон встанет"
+    if phase == PHASE_COOLING:
+        return f"уборку отменили — предложу снова через {int(cooling)} с"
     if phase == PHASE_WAITING:
         return f"жду тишины · {int(quiet)} с" if quiet is not None else "жду тишины"
     if percent is not None and threshold is not None:
@@ -119,6 +150,8 @@ def observe(
     quiet=None,
     workers: int = 0,
     worker: str = "",
+    cooling: float = 0.0,
+    winding: bool = False,
 ) -> bool:
     """Record this tick: the watcher reports FACTS, this module names them.
 
@@ -127,7 +160,15 @@ def observe(
     decided in one place — the window and any future reader must not each
     invent their own wording for the same state.
     """
-    phase = phase_of(blind=blind, busy=busy, arming=arming, percent=percent, threshold=threshold)
+    phase = phase_of(
+        blind=blind,
+        busy=busy,
+        arming=arming,
+        percent=percent,
+        threshold=threshold,
+        cooling=cooling,
+        winding=winding,
+    )
     detail = phrase(
         phase,
         quiet=quiet,
@@ -135,6 +176,7 @@ def observe(
         threshold=threshold,
         workers=workers,
         worker=worker,
+        cooling=cooling,
     )
     return write(project_dir, phase, detail, percent=percent)
 

@@ -180,7 +180,7 @@ def test_config_defaults_when_absent(project_dir):
     config = load_config(project_dir)
 
     assert config["context_window"] == 1_000_000
-    assert config["soft_threshold"] == 30.0
+    assert config["soft_threshold"] == 50.0
     assert config["hard_threshold"] == 75.0
 
 
@@ -188,7 +188,7 @@ def test_config_defaults_when_absent(project_dir):
 def test_config_malformed_falls_back_to_defaults(project_dir, raw):
     (project_dir / ".tausik" / "config.json").write_text(raw, encoding="utf-8")
 
-    assert load_config(project_dir)["soft_threshold"] == 30.0
+    assert load_config(project_dir)["soft_threshold"] == 50.0
 
 
 def test_config_overrides_are_honoured(project_dir):
@@ -214,7 +214,7 @@ def test_config_rejects_nonsense_values(project_dir):
     config = load_config(project_dir)
 
     assert config["context_window"] == 1_000_000
-    assert config["soft_threshold"] == 30.0
+    assert config["soft_threshold"] == 50.0
 
 
 # --- outside a run there is nothing to measure -----------------------------
@@ -246,3 +246,26 @@ def test_a_stopped_run_stops_the_measuring(project_dir, monkeypatch, tmp_path):
 
     assert written  # the first run did measure
     assert sorted(p.name for p in (project_dir / ".tausik" / "autoloop").iterdir()) == written
+
+
+def test_the_anchor_gap_comes_from_the_config(project_dir):
+    """AC-1: интервал якоря был зашит числом 1200, и вставший прогон стоял
+    двадцать минут ночи, ради которой прогон и объявляли."""
+    assert load_config(project_dir)["anchor_seconds"] == 600.0
+
+    (project_dir / ".tausik" / "config.json").write_text(
+        json.dumps({"autoloop": {"anchor_seconds": 300}}), encoding="utf-8"
+    )
+
+    assert load_config(project_dir)["anchor_seconds"] == 300.0
+
+
+@pytest.mark.parametrize("nonsense", [0, -5, "десять минут", None])
+def test_a_nonsense_anchor_gap_falls_back_to_the_default(project_dir, nonsense):
+    """AC-3 НЕГАТИВНЫЙ: ноль или строка превратили бы якорь в подачу каждый
+    тик — чат получал бы команду поверх команды."""
+    (project_dir / ".tausik" / "config.json").write_text(
+        json.dumps({"autoloop": {"anchor_seconds": nonsense}}), encoding="utf-8"
+    )
+
+    assert load_config(project_dir)["anchor_seconds"] == 600.0

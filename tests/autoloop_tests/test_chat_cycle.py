@@ -281,3 +281,220 @@ def test_a_chat_that_never_answers_is_not_delivered(project_dir, monkeypatch):
     monkeypatch.setattr(cycle.time, "monotonic", iter([0.0, 1.0, 999.0]).__next__)
 
     assert cycle.wait_speaking(str(project_dir), baseline=10, sleep=lambda _s: None) is False
+
+
+# --- the input box, told apart from the rest of a living screen -------------
+#
+# The rows below are a transcript of two real chats, read through
+# `autoloop_keys.console_text` while nobody touched the keyboard. Both had the
+# same shape, and two of the twelve rows changed within six seconds by
+# themselves — which is the whole defect.
+
+RULE = "─" * 118
+
+
+def screen(draft: str = "", *, spinner: str = "4m 35s", clock: str = "2h 13m") -> str:
+    """The measured layout: conversation, spinner, box, status bar."""
+    return "\n".join(
+        [
+            "     git log --oneline -5",
+            '     echo "=== дерево:"; git status --porcelain | wc -l',
+            "",
+            f"✢ Zigzagging… ({spinner} · ↓ 13.1k tokens)",
+            "",
+            RULE,
+            f"❯ {draft}".rstrip(),
+            RULE,
+            "  [Opus 5 (1M context)] │ git:(feat/mod-ports-pipeline) │ ⏱️  2h 14m",
+            f"  Context █████░░░░░ 53% │ Usage ██░░░░░░░░ 21% (resets in {clock})",
+            "  2 CLAUDE.md | 1 rules | 8 MCPs | 9 hooks",
+            "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent",
+        ]
+    )
+
+
+def test_a_ticking_screen_is_not_somebody_typing():
+    """The one that cost 23 cleanups in a day. The spinner counts seconds and
+    the status bar counts minutes; against the whole screen tail both read as a
+    person at the keyboard, and each false reading bought ten minutes of
+    refusal cooldown while the window climbed from 30% to 50.2%."""
+    before = screen(spinner="4m 2s", clock="2h 14m")
+    after = screen(spinner="4m 8s", clock="2h 13m")
+
+    assert before != after  # the screens really do differ
+    assert cycle.draft_changed(before, after) is False
+
+
+def test_a_draft_in_the_box_still_stops_the_cleanup():
+    """AC negative: the guard exists for exactly this, and narrowing the
+    comparison must not cost it. Typed while the clocks also moved."""
+    before = screen("прив", spinner="4m 2s")
+    after = screen("привет, мир", spinner="4m 8s")
+
+    assert cycle.draft_changed(before, after) is True
+
+
+def test_a_draft_that_grew_a_line_stops_the_cleanup():
+    """A multi-line draft makes the box taller; the rows between the rules
+    change in number, which is the same answer."""
+    before = screen("первая строка")
+    after = before.replace("❯ первая строка", "❯ первая строка\n  вторая строка")
+
+    assert cycle.draft_changed(before, after) is True
+
+
+def test_a_screen_without_a_box_is_judged_whole():
+    """AC negative: an unparsed screen must not answer «no box, so no draft».
+    Another TUI, or a window too short to show the input, falls back to the
+    comparison this replaced rather than to permission to wipe."""
+    assert cycle.input_box("> прив") is None
+    assert cycle.draft_changed("> прив", "> привет") is True
+
+
+def test_two_rules_with_nothing_between_them_are_not_a_box():
+    """A box has to hold something. Adjacent rules are a divider."""
+    assert cycle.input_box("\n".join(["текст", RULE, RULE, "  статусбар"])) is None
+
+
+def test_the_box_is_the_lowest_pair_of_rules():
+    """A rule drawn in the conversation above must not widen the box to
+    include the spinner."""
+    drawn_in_the_conversation = "\n".join(["итог:", RULE, "текст"]) + "\n" + screen("черновик")
+
+    assert cycle.input_box(drawn_in_the_conversation) == ["❯ черновик"]
+
+
+# --- winding the run down before the window is wiped -------------------------
+
+
+class TestTheRunIsAskedToFinishFirst:
+    """Раньше уборка приходила в любую 45-секундную паузу — то есть могла лечь
+    посреди задачи, а сам прогон о заполнении окна не знал и брал ещё работу."""
+
+    def cycle(self, **kw):
+        return cycle.Maintenance(threshold=50, **kw)
+
+    def armed(self, **kw):
+        machine = self.cycle(**kw)
+        machine.consider(99, now=0.0)
+        return machine
+
+    def test_the_request_says_what_to_do_and_fits_one_line(self):
+        """Печатается в консоль, а перевод строки там — это отправка."""
+        text, trace = cycle.wind_down_step("очередь задач")
+
+        assert "\n" not in text
+        assert "Новую задачу не начинай" in text
+        assert "очередь задач" in text
+        assert trace == cycle.WAIT_SPEAKING
+
+    def test_a_run_without_a_direction_is_still_asked_to_stop(self):
+        text, _ = cycle.wind_down_step("")
+
+        assert "Направление" not in text and "остановись" in text
+
+    def test_the_countdown_leads_to_winding_not_to_the_wipe(self):
+        machine = self.armed()
+        assert machine.due(now=99.0) is True
+
+        machine.wind(now=99.0, wall=1000.0)
+
+        assert machine.state == cycle.STATE_WINDING
+        assert machine.due(now=200.0) is False  # отсчёт кончился, он не повторяется
+
+    def test_the_wipe_waits_until_the_run_actually_stood(self):
+        """AC-2: тишина берётся у флага Stop-хука, а не у транскрипта."""
+        machine = self.armed()
+        machine.wind(now=99.0, wall=1000.0)
+
+        assert machine.wound_up(standing_for=None, now=120.0) is False
+        assert machine.wound_up(standing_for=10.0, now=120.0) is False
+        assert machine.wound_up(standing_for=600.0, now=120.0) is True
+
+    def test_work_in_flight_holds_the_wipe(self):
+        machine = self.armed()
+        machine.wind(now=99.0, wall=1000.0)
+
+        assert machine.wound_up(standing_for=600.0, now=120.0, busy=True) is False
+
+    def test_a_task_that_never_winds_down_does_not_hold_the_window_for_ever(self):
+        """AC-3 НЕГАТИВНЫЙ: право вето вернуло бы исходный дефект — окно,
+        которое не чистится никогда."""
+        machine = self.armed(wind_timeout=1800.0)
+        machine.wind(now=100.0, wall=1000.0)
+
+        assert machine.wound_up(standing_for=None, now=100.0 + 1799.0) is False
+        assert machine.wound_up(standing_for=None, now=100.0 + 1801.0) is True
+        assert machine.timed_out(now=100.0 + 1801.0) is True
+
+    def test_a_human_who_came_back_cancels_the_winding_too(self):
+        """AC-4 НЕГАТИВНЫЙ: просьба свернуться уже подана и вреда не несёт, а
+        вытирать чат из-под вернувшегося человека нельзя."""
+        machine = self.armed()
+        machine.wind(now=99.0, wall=1000.0)
+
+        assert machine.cancel(now=120.0) is True
+        assert machine.state == cycle.STATE_IDLE
+        assert machine.cooling_for(now=120.0) == cycle.CANCEL_QUIET
+
+    def test_our_own_request_is_not_a_human_coming_back(self):
+        """Наблюдатель печатает просьбу В ЧАТ, поэтому она ложится в транскрипт
+        репликой человека — и отменила бы уборку, которая её и послала."""
+        machine = self.armed()
+        machine.wind(now=99.0, wall=1000.0)
+
+        assert machine.echo_of_us(human_at=1000.5) is True
+        assert machine.echo_of_us(human_at=1010.0) is False  # это уже человек
+
+    def test_nothing_is_an_echo_before_the_request_was_sent(self):
+        """НЕГАТИВНЫЙ: до свёртки поблажки нет — иначе обычный обратный отсчёт
+        перестанет отменяться человеком."""
+        machine = self.armed()
+
+        assert machine.echo_of_us(human_at=1000.5) is False
+
+    def test_the_cycle_returns_to_idle_by_itself(self):
+        """AC-5: раньше из ARMED его выводила ложная отмена «человек вернулся»
+        тиком позже — она видна в логе после каждой удачной уборки. Без этой
+        случайности последовательность повторилась бы на следующем тике."""
+        machine = self.armed()
+        machine.wind(now=99.0, wall=1000.0)
+
+        machine.finish()
+
+        assert machine.state == cycle.STATE_IDLE
+        assert machine.awaiting_drop is True
+        assert machine.wound_up(standing_for=600.0, now=200.0) is False
+
+
+class TestTheAnchorTellsTheRunToDecideForItself:
+    """Якорь бьёт по чату, который стоит. Чаще всего он стоит на вопросе,
+    который сам и задал, — а «продолжай» оставляет его свободным задать тот же
+    вопрос снова. Отвечать некому: это и значит объявленный прогон."""
+
+    def test_it_allows_the_run_to_answer_its_own_question(self):
+        text, trace = cycle.anchor_step("очередь задач")
+
+        assert "прими решение сам" in text
+        assert "task log" in text
+        assert "очередь задач" in text
+        assert trace == cycle.WAIT_SPEAKING
+
+    def test_it_names_the_way_out_of_something_impassable(self):
+        """Иначе «реши сам» толкает выдумывать обходной путь молча."""
+        text, _ = cycle.anchor_step("")
+
+        assert "task block" in text and "Направление" not in text
+
+    def test_it_fits_one_line(self):
+        """Печатается в консоль, где перевод строки — это отправка."""
+        assert "\n" not in cycle.anchor_step("очередь")[0]
+
+    def test_it_is_not_the_step_that_follows_a_wipe(self):
+        """AC-2: после /clear вопроса не было — контекст стёрт, и разрешать
+        нечего. Два состояния, два текста."""
+        after_wipe, _ = cycle.continue_step("очередь")
+        standing, _ = cycle.anchor_step("очередь")
+
+        assert after_wipe != standing
+        assert "прими решение сам" not in after_wipe

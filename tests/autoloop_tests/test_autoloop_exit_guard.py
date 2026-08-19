@@ -93,13 +93,13 @@ def test_blocks_at_soft_threshold_on_a_finished_task(
     monkeypatch, capsys, project_dir, add_task, transcript
 ):
     add_task("t1", steps=[("a", True)])
-    path = transcript([assistant_entry(cache_read=310_000)])
+    path = transcript([assistant_entry(cache_read=510_000)])
 
     code, decision = capture(monkeypatch, project_dir, {"transcript_path": path}, capsys=capsys)
 
     assert code == 0
     assert decision["decision"] == "block"
-    assert "31.0%" in decision["reason"]
+    assert "51.0%" in decision["reason"]
     assert "t1" in decision["reason"]
 
 
@@ -130,7 +130,7 @@ def test_no_block_below_threshold(monkeypatch, capsys, project_dir, add_task, tr
 def test_second_stop_does_not_block_again(monkeypatch, capsys, project_dir, add_task, transcript):
     """AC negative: block→block would trap the process in a loop it cannot leave."""
     add_task("t1", steps=[("a", True)])
-    path = transcript([assistant_entry(cache_read=400_000)])
+    path = transcript([assistant_entry(cache_read=600_000)])
 
     _, first = capture(monkeypatch, project_dir, {"transcript_path": path}, capsys=capsys)
     _, second = capture(monkeypatch, project_dir, {"transcript_path": path}, capsys=capsys)
@@ -225,7 +225,7 @@ def test_state_tells_the_supervisor_why_the_process_ended(
 ):
     """AC: 'ran out of context' must be distinguishable from 'no work left'."""
     add_task("t1", steps=[("a", True)])
-    path = transcript([assistant_entry(cache_read=350_000)])
+    path = transcript([assistant_entry(cache_read=550_000)])
 
     capture(monkeypatch, project_dir, {"transcript_path": path}, capsys=capsys)
     state = read_state(project_dir, SESSION)
@@ -233,7 +233,7 @@ def test_state_tells_the_supervisor_why_the_process_ended(
     assert state["exit_requested"] is True
     assert state["exit_kind"] == EXIT_SOFT
     assert state["task_state"] == STATE_COMPLETE
-    assert state["percent"] == 35.0
+    assert state["percent"] == 55.0
 
 
 def test_idle_state_is_recorded_when_no_task_is_active(
@@ -277,7 +277,7 @@ def test_a_declared_run_arms_the_guard_without_autonomy(
     work. Asking the agent to wrap up is the only signal that reaches it."""
     declare_run(project_dir)
     add_task("t1", steps=[("a", True)])
-    path = transcript([assistant_entry(cache_read=320_000)])
+    path = transcript([assistant_entry(cache_read=520_000)])
 
     code, decision = capture(
         monkeypatch, project_dir, {"transcript_path": path}, autonomy=False, capsys=capsys
@@ -294,7 +294,7 @@ def test_the_chat_is_told_to_checkpoint_not_to_die(
     instruction to exit would take the human's window down with it."""
     declare_run(project_dir)
     add_task("t1", steps=[("a", True)])
-    path = transcript([assistant_entry(cache_read=320_000)])
+    path = transcript([assistant_entry(cache_read=520_000)])
 
     _code, decision = capture(
         monkeypatch, project_dir, {"transcript_path": path}, autonomy=False, capsys=capsys
@@ -310,7 +310,7 @@ def test_without_a_run_the_guard_still_keeps_quiet(
     """AC negative: outside a declared run the human never asked for autonomy,
     and blocking Stop would hijack a turn they are watching."""
     add_task("t1", steps=[("a", True)])
-    path = transcript([assistant_entry(cache_read=320_000)])
+    path = transcript([assistant_entry(cache_read=520_000)])
 
     code, decision = capture(
         monkeypatch, project_dir, {"transcript_path": path}, autonomy=False, capsys=capsys
