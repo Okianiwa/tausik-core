@@ -300,7 +300,7 @@ def _is_border(row: str) -> bool:
     return len(text) >= MIN_BORDER and set(text) <= BOX_CHARS
 
 
-def input_box(screen: str):
+def input_box(screen: str) -> list[str] | None:
     """The rows that can hold a draft, or None when the box is not on screen.
 
     The layout, measured identically on two live chats: transcript tail and
@@ -322,7 +322,7 @@ def input_box(screen: str):
     return rows[top + 1 : bottom]
 
 
-def draft_changed(before, after) -> bool:
+def draft_changed(before: str | None, after: str | None) -> bool:
     """Did the DRAFT move while the countdown ran?
 
     Only a comparison, never a reading of the input line itself: a chat that

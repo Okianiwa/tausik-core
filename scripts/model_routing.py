@@ -93,7 +93,7 @@ def _auto_find_transcript() -> str | None:
 
         path = presence.transcript_path(os.getcwd())
         if path and os.path.isfile(path):
-            return path
+            return str(path)
     except Exception:  # noqa: BLE001 — best-effort: an install without autoloop still gets the fallback
         pass
     try:

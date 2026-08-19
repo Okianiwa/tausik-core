@@ -58,7 +58,7 @@ _STATUS_COLOR = {
 # Weight follows importance, which it did not: the service caption was the
 # brightest line and the task slug — the thing anyone opens this window to see —
 # the dimmest. One table, so the hierarchy is a fact a test can read.
-ROW_FONT = {
+ROW_FONT: dict[str, tuple[str, int] | tuple[str, int, str]] = {
     tui.ROLE_TASK: ("Segoe UI", 12, "bold"),
     tui.ROLE_META: ("Segoe UI", 9),
     tui.ROLE_TASKS: ("Consolas", 10),
@@ -298,7 +298,7 @@ def run_overlay(project_dir: str, config: dict | None = None) -> int:
     )
     cat.place(x=PAD_X, y=PAD_Y)
 
-    labels = []
+    labels: list[tk.Label] = []
     for role in ROW_ORDER:
         label = tk.Label(
             frame,
@@ -374,9 +374,12 @@ def run_overlay(project_dir: str, config: dict | None = None) -> int:
         # A joke is honest content for "no run is going" and a poor answer to
         # "why is it showing that number?" — which is what it used to be.
         watcher = wstate.read(project_dir)
+        # Вынуто из вызова: у состояния может не быть фазы вовсе, и ключа None
+        # в таблице цветов нет — это отсутствие, а не отдельный цвет.
+        phase = str((watcher or {}).get("phase") or "")
         quip.config(
             text=tui.watch_line(watcher, picker.update(data, time.monotonic())),
-            fg=PHASE_COLOR.get((watcher or {}).get("phase"), "#9aa4b8"),
+            fg=PHASE_COLOR.get(phase, "#9aa4b8"),
         )
         rows = overlay_rows(data)
         for label, (role, text) in zip(labels, rows):

@@ -132,7 +132,7 @@ def should_act(
     if busy and (hard is None or percent is None or percent < hard):
         return False
     if standing_for is not _UNASKED and standing_for is not None:
-        return standing_for >= idle_needed
+        return bool(standing_for >= idle_needed)
     return True
 
 
@@ -205,7 +205,7 @@ def anchor_due(
         return False
     if standing_for is None or standing_for < gap:
         return False
-    return (now - last_at) >= gap
+    return bool((now - last_at) >= gap)
 
 
 def chat_pid(exclude=()) -> int | None:
