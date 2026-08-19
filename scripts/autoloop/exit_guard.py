@@ -64,10 +64,16 @@ _HARD_INSTRUCTION = (
 )
 
 
+# Не утверждает, что задача закончена: в чате эта просьба приходит и посреди
+# работы — окно заполняется, пока агент берёт следующее, и другого канала до
+# него нет. Наблюдатель снаружи ждёт 45 секунд тишины, которых сплошная работа
+# не даёт.
 _SOFT_CHAT = (
-    "[autoloop] Контекст заполнен на {percent}% (порог {threshold}%), а задача «{task}» "
-    "доведена до конца — все шаги плана закрыты. Сворачивайся СЕЙЧАС, не начиная новую работу:\n"
-    "1. Убедись, что задача закрыта через `tausik verify` + `task done --ac-verified`.\n"
+    "[autoloop] Контекст заполнен на {percent}% (порог {threshold}%) — окно скоро будет "
+    "очищено. Доведи задачу «{task}» до логического конца и остановись, новую не начинай:\n"
+    "1. Закрой её штатно: `task update --relevant-files`, `tausik verify`, "
+    "`task done --ac-verified`. Если закрыть нельзя — запиши состояние в `task log` "
+    "и заблокируй с причиной (`task block`).\n"
     "2. Выполни `/checkpoint` — handoff в БД переживёт очистку, переписка нет.\n"
     "3. Заверши турн и ничего больше не делай. Контекст очистит наблюдатель снаружи "
     "и вернёт тебя к работе — процесс завершать НЕ нужно, сессию НЕ закрывай."
@@ -98,14 +104,28 @@ def run_declared(project_dir: str) -> bool:
         return False
 
 
-def decide(state: dict, config: dict) -> str | None:
-    """Which exit, if any, this state calls for. None = let the turn end."""
+def decide(state: dict, config: dict, interactive: bool = False) -> str | None:
+    """Which exit, if any, this state calls for. None = let the turn end.
+
+    The soft threshold asks for a wind-down, and whom it may interrupt differs
+    by mode. A headless iteration dies after its task regardless, so cutting
+    one off mid-task buys nothing and costs the work in flight — there the
+    request waits for a task already closed.
+
+    A declared run inside a live chat has no such boundary. The window fills
+    while the agent takes on the next thing, and this hook — firing at the end
+    of every turn — is the only channel that reaches it: the watcher outside
+    arms on 45 seconds of silence, which continuous work never produces. So in
+    a chat the soft threshold asks however far the task has got.
+    """
     percent = state.get("percent")
     if not isinstance(percent, (int, float)):
         return None  # unmeasurable context is not evidence of a full one
     if percent >= config["hard_threshold"]:
         return EXIT_HARD
-    if percent >= config["soft_threshold"] and state.get("task_state") == STATE_COMPLETE:
+    if percent >= config["soft_threshold"] and (
+        interactive or state.get("task_state") == STATE_COMPLETE
+    ):
         return EXIT_SOFT
     return None
 
@@ -161,10 +181,6 @@ def main() -> int:
     config = load_config(project_dir)
     session_id = str(payload.get("session_id") or "")
     state = build_payload(project_dir, payload.get("transcript_path") or "", session_id)
-    kind = decide(state, config)
-    if kind is None:
-        return 0
-
     # Two ways to be armed. Headless autonomy is one. The other is a run the
     # human declared in this very chat: without it the guard stays silent and
     # the window fills to the brim, because the watcher outside waits for a
@@ -172,6 +188,10 @@ def main() -> int:
     # own work. Asking the agent to wrap up is the only signal that reaches it
     # mid-flight.
     interactive = not autonomy_enabled(project_dir) and run_declared(project_dir)
+    kind = decide(state, config, interactive=interactive)
+    if kind is None:
+        return 0
+
     if not (autonomy_enabled(project_dir) or interactive):
         note = autonomy.warn_if_misconfigured(project_dir)
         print(

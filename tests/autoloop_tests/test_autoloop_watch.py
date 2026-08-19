@@ -924,7 +924,7 @@ def test_a_project_with_no_transcript_folder_says_so(tmp_path, monkeypatch):
 # --- the last look before typing -------------------------------------------
 
 
-def spin_watch(monkeypatch, project_dir, screens, ticks=4, quiet=600.0, said=None):
+def spin_watch(monkeypatch, project_dir, screens, ticks=4, quiet=600.0):
     """Run the loop for a few ticks with everything but the draft check fixed:
     the window is full, the transcript is quiet, the chat is alive."""
     clock = iter([0.0, 10.0, 20.0, 30.0, 40.0, 50.0])
@@ -943,15 +943,15 @@ def spin_watch(monkeypatch, project_dir, screens, ticks=4, quiet=600.0, said=Non
     monkeypatch.setattr(watch.keys, "console_text", lambda _pid: next(screens))
     monkeypatch.setattr(watch.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(watch.time, "sleep", lambda _s: None)
-    monkeypatch.setattr(watch, "run_sequence", lambda *_a: ran.append("sequence") or True)
-    # Свёртка: просьба подаётся клавишами, а окно вытирается только когда
-    # прогон встал. Здесь закреплено и то и другое — эти тесты про другое.
+    # Настоящий run_sequence возвращает цикл в idle через finish(); мок обязан
+    # делать то же, иначе отсчёт срабатывает повторно на следующем тике.
     monkeypatch.setattr(
-        watch, "deliver", lambda _p, _pid, command, _trace: (
-            said.append(command) if said is not None else None,
-            (True, ""),
-        )[1]
+        watch,
+        "run_sequence",
+        lambda _p, _pid, cycle_: (ran.append("sequence"), cycle_.finish(), True)[2],
     )
+    # Уборка идёт, только когда прогон СТОИТ по флагу Stop-хука. Эти тесты про
+    # последний взгляд на экран, поэтому стояние закреплено.
     monkeypatch.setattr(watch, "standing_seconds", lambda *_a, **_k: 600.0)
     watch.watch(str(project_dir), pid=111, threshold=30)
     return ran, (project_dir / ".tausik" / "chat-watch.log").read_text(encoding="utf-8")
@@ -1202,29 +1202,6 @@ class TestStopInterruptsTheCycle:
         assert lock.read_text(encoding="utf-8").strip() != "999999999"
 
 
-def test_the_run_is_asked_to_wind_down_before_the_window_is_wiped(project_dir, monkeypatch):
-    """AC-1: уборка больше не падает в первую попавшуюся 45-секундную паузу.
-    Сначала прогон просят довести задачу до конца, и только когда он встал —
-    вытирают окно. Раньше он о заполнении контекста вообще не знал."""
-    said = []
-    ran, journal = spin_watch(monkeypatch, project_dir, iter(["> ", "> "]), said=said)
-
-    assert ran == ["sequence"]
-    assert said and "Новую задачу не начинай" in said[0]
-    assert journal.index("просил свернуть задачу") < journal.index("убираю окно")
-
-
-def test_the_window_is_not_wiped_in_the_same_breath_as_the_request(project_dir, monkeypatch):
-    """AC negative: тишина, по которой взводилась уборка, измерена ДО того, как
-    просьбу напечатали. Судить по ней здесь — значит вытереть окно, не дав
-    просьбе быть прочитанной."""
-    said = []
-    ran, _journal = spin_watch(monkeypatch, project_dir, iter(["> ", "> "]), ticks=3, said=said)
-
-    assert said, "просьба свернуться не подавалась"
-    assert ran == [], "окно вытерли на том же тике, что и попросили свернуться"
-
-
 class TestAShorterAnchorKeepsEveryGuard:
     """AC-4: интервал сократился вдвое, и это единственное, что изменилось.
     Каждое условие в anchor_due — способ не заговорить поверх кого-то, и
@@ -1259,3 +1236,37 @@ class TestAShorterAnchorKeepsEveryGuard:
     def test_it_does_not_fire_before_the_interval(self):
         assert watch.anchor_due(self.GAP - 1, 0.0, self.GAP - 1, busy=False,
                                 arming=False, wasted=0, gap=self.GAP) is False
+
+
+class TestTheWipeWaitsForTheRunToStand:
+    """Тишина транскрипта означает, что кончился ХОД, а не работа: длинный
+    вызов инструмента молчит минутами и выглядит как пустая комната. Про конец
+    хода знает только хост, и его флаг здесь спрашивают."""
+
+    OVER = dict(percent=99, threshold=50, quiet_for=600.0)
+
+    def test_a_standing_run_is_cleaned(self):
+        assert watch.should_act(**self.OVER, standing_for=600.0) is True
+
+    def test_a_turn_in_flight_is_not_cleaned(self):
+        """Транскрипт молчит 600 с, но ход идёт — раньше это была уборка
+        посреди работы."""
+        assert watch.should_act(**self.OVER, standing_for=5.0) is False
+
+    def test_an_unreadable_flag_does_not_veto(self):
+        """AC negative: флага нет (chat_ready не установлен, прогон только
+        начался) — уборка не запрещается навсегда, проверка откатывается к
+        прежнему условию по тишине."""
+        assert watch.should_act(**self.OVER, standing_for=None) is True
+
+    def test_a_caller_that_never_asks_is_unchanged(self):
+        """AC negative: «не спрашивали» и «спросили, не смогли ответить» — не
+        одно и то же, и ни то ни другое не должно запрещать уборку."""
+        assert watch.should_act(**self.OVER) is True
+
+    def test_standing_cannot_override_the_other_refusals(self):
+        """Стоящий прогон не отменяет ни короткой тишины, ни идущей работы."""
+        assert watch.should_act(percent=99, threshold=50, quiet_for=5.0, standing_for=600.0) is False
+        assert (
+            watch.should_act(**self.OVER, busy=True, hard=None, standing_for=600.0) is False
+        )

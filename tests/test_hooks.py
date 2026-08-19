@@ -1092,3 +1092,170 @@ class TestPushTicketAcrossRepositories:
             {"tool_input": {"command": f"cd {repo} && git push {rewrite} origin main"}},
         )
         assert r.returncode != 0
+
+
+class TestHereDocumentBodyIsData:
+    """Тело here-document — это stdin, а не командная строка.
+
+    `shlex` про конструкцию не знает, поэтому каждое слово тела приходило
+    ОТДЕЛЬНЫМ токеном — ровно тем признаком, на котором держится весь разбор
+    («команда — раздельные токены, упоминание — один токен»). Замерено:
+    scan_target возвращал `git commit -F - << EOF Дальше git push -f в форк.
+    EOF`, и правило force-push срабатывало на обычном коммите. Обход был
+    известен и записан как gotcha («коммит длинным сообщением — только
+    git commit -F файл»), но дефекта под ним не было.
+    """
+
+    def test_a_commit_message_may_mention_a_force_push(self):
+        command = (
+            "git commit -F - <<'EOF'\n"
+            "fix: правка гейта\n"
+            "\n"
+            "После этого нужен git push -f в форк.\n"
+            "EOF"
+        )
+
+        r = run_hook("bash_firewall.py", {"tool_input": {"command": command}})
+
+        assert r.returncode == 0, r.stderr
+
+    def test_a_body_written_to_a_file_is_data_too(self):
+        command = (
+            "cat <<'EOF' > /tmp/notes.txt\n"
+            "напоминание: git push --force здесь запрещён\n"
+            "EOF"
+        )
+
+        r = run_hook("bash_firewall.py", {"tool_input": {"command": command}})
+
+        assert r.returncode == 0, r.stderr
+
+    def test_a_body_fed_to_a_shell_is_a_script(self):
+        """НЕГАТИВНЫЙ: `bash <<EOF` тело ИСПОЛНЯЕТ, и это не данные. Без этого
+        фикс превратился бы в обход: любую команду можно было бы завернуть в
+        here-document."""
+        command = "bash <<'EOF'\ngit push --force origin main\nEOF"
+
+        r = run_hook("bash_firewall.py", {"tool_input": {"command": command}})
+
+        assert r.returncode == 2, r.stdout
+
+    def test_a_destructive_body_fed_to_a_shell_is_caught(self):
+        command = "sh <<EOF\nrm -rf /\nEOF"
+
+        r = run_hook("bash_firewall.py", {"tool_input": {"command": command}})
+
+        assert r.returncode == 2, r.stdout
+
+    def test_a_body_that_never_ends_is_judged_whole(self):
+        """НЕГАТИВНЫЙ: без закрывающего слова границу тела определить нечем, и
+        направление здесь то же, что во всём модуле, — судить всё."""
+        command = "git commit -F - <<'EOF'\ngit push --force origin main"
+
+        r = run_hook("bash_firewall.py", {"tool_input": {"command": command}})
+
+        assert r.returncode == 2, r.stdout
+
+    def test_a_real_force_push_is_still_blocked(self):
+        """НЕГАТИВНЫЙ: сужение не должно ослабить само правило."""
+        r = run_hook(
+            "bash_firewall.py",
+            {"tool_input": {"command": "git push --force origin main"}},
+        )
+
+        assert r.returncode == 2, r.stdout
+
+
+class TestHereDocumentSplitting:
+    """Разбор самой конструкции, отдельно от вердикта."""
+
+    def strip(self, command):
+        import sys as _sys
+
+        _sys.path.insert(0, HOOKS_DIR)
+        from bash_cmd_scan import _strip_heredoc_bodies
+
+        return _strip_heredoc_bodies(command)
+
+    def test_the_body_leaves_and_the_operator_stays(self):
+        line, bodies = self.strip("git commit -F - <<'EOF'\nтекст\nEOF")
+
+        assert bodies == ["текст"]
+        assert "текст" not in line
+
+    def test_two_documents_are_split_separately(self):
+        line, bodies = self.strip("cat <<'A'\nодин\nA\ncat <<'B'\nдва\nB")
+
+        assert bodies == ["один", "два"]
+        assert "один" not in line and "два" not in line
+
+    def test_a_here_string_has_no_body(self):
+        """`<<<` — это here-string: тела нет, и забирать нечего."""
+        command = 'grep x <<<"git push --force"'
+
+        assert self.strip(command) == (command, [])
+
+    def test_a_dash_form_and_a_quoted_delimiter_are_recognised(self):
+        _line, bodies = self.strip("cat <<- 'END'\n\tтело\nEND")
+
+        assert bodies == ["\tтело"]
+
+    def test_an_unterminated_document_is_returned_untouched(self):
+        command = "git commit -F - <<'EOF'\nтекст без конца"
+
+        assert self.strip(command) == (command, [])
+
+    def test_a_command_without_documents_is_untouched(self):
+        assert self.strip("ls -la") == ("ls -la", [])
+
+
+class TestThePushGateReadsTheCommandNotTheMessage:
+    """Исходный симптом, ради которого заводилась задача: обычный коммит с
+    длинным сообщением получал отказ пуш-гейта, если в тексте упоминалась
+    отправка. Обход («git commit -F файл») был записан в общее хранилище как
+    gotcha, а дефекта под ним не было.
+
+    Пуш-гейт ходит не через scan_target, а через tokenize, поэтому чинить
+    пришлось оба входа в POSIX-диалект.
+    """
+
+    def gate(self, command):
+        import sys as _sys
+
+        _sys.path.insert(0, HOOKS_DIR)
+        import git_push_gate
+
+        return git_push_gate._command_invokes_git_push(command, "Bash")
+
+    def test_a_message_mentioning_a_push_is_not_a_push(self):
+        command = (
+            "git commit -F - <<'EOF'\n"
+            "fix: правка гейта\n"
+            "дальше нужен git push в форк\n"
+            "EOF"
+        )
+
+        assert self.gate(command) is False
+
+    def test_a_mention_at_the_start_of_a_line_is_not_a_push(self):
+        """Самый злой случай: якорь `_CMD_START` принимает начало строки, а
+        строка тела выглядит как начало команды."""
+        command = (
+            "git commit -F - <<'EOF'\n"
+            "fix: правка\n"
+            "git push в форк делается отдельным шагом\n"
+            "EOF"
+        )
+
+        assert self.gate(command) is False
+
+    def test_a_push_fed_to_a_shell_is_still_a_push(self):
+        """НЕГАТИВНЫЙ: `bash <<EOF` тело исполняет, и билет для него нужен —
+        иначе фикс стал бы способом отправить без билета."""
+        command = "bash <<'EOF'\ngit push origin main\nEOF"
+
+        assert self.gate(command) is True
+
+    def test_a_real_push_is_still_a_push(self):
+        assert self.gate("git push origin main") is True
+        assert self.gate("git commit -m x && git push") is True

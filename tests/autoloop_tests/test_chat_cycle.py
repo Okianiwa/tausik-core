@@ -367,104 +367,7 @@ def test_the_box_is_the_lowest_pair_of_rules():
 # --- winding the run down before the window is wiped -------------------------
 
 
-class TestTheRunIsAskedToFinishFirst:
-    """Раньше уборка приходила в любую 45-секундную паузу — то есть могла лечь
-    посреди задачи, а сам прогон о заполнении окна не знал и брал ещё работу."""
 
-    def cycle(self, **kw):
-        return cycle.Maintenance(threshold=50, **kw)
-
-    def armed(self, **kw):
-        machine = self.cycle(**kw)
-        machine.consider(99, now=0.0)
-        return machine
-
-    def test_the_request_says_what_to_do_and_fits_one_line(self):
-        """Печатается в консоль, а перевод строки там — это отправка."""
-        text, trace = cycle.wind_down_step("очередь задач")
-
-        assert "\n" not in text
-        assert "Новую задачу не начинай" in text
-        assert "очередь задач" in text
-        assert trace == cycle.WAIT_SPEAKING
-
-    def test_a_run_without_a_direction_is_still_asked_to_stop(self):
-        text, _ = cycle.wind_down_step("")
-
-        assert "Направление" not in text and "остановись" in text
-
-    def test_the_countdown_leads_to_winding_not_to_the_wipe(self):
-        machine = self.armed()
-        assert machine.due(now=99.0) is True
-
-        machine.wind(now=99.0, wall=1000.0)
-
-        assert machine.state == cycle.STATE_WINDING
-        assert machine.due(now=200.0) is False  # отсчёт кончился, он не повторяется
-
-    def test_the_wipe_waits_until_the_run_actually_stood(self):
-        """AC-2: тишина берётся у флага Stop-хука, а не у транскрипта."""
-        machine = self.armed()
-        machine.wind(now=99.0, wall=1000.0)
-
-        assert machine.wound_up(standing_for=None, now=120.0) is False
-        assert machine.wound_up(standing_for=10.0, now=120.0) is False
-        assert machine.wound_up(standing_for=600.0, now=120.0) is True
-
-    def test_work_in_flight_holds_the_wipe(self):
-        machine = self.armed()
-        machine.wind(now=99.0, wall=1000.0)
-
-        assert machine.wound_up(standing_for=600.0, now=120.0, busy=True) is False
-
-    def test_a_task_that_never_winds_down_does_not_hold_the_window_for_ever(self):
-        """AC-3 НЕГАТИВНЫЙ: право вето вернуло бы исходный дефект — окно,
-        которое не чистится никогда."""
-        machine = self.armed(wind_timeout=1800.0)
-        machine.wind(now=100.0, wall=1000.0)
-
-        assert machine.wound_up(standing_for=None, now=100.0 + 1799.0) is False
-        assert machine.wound_up(standing_for=None, now=100.0 + 1801.0) is True
-        assert machine.timed_out(now=100.0 + 1801.0) is True
-
-    def test_a_human_who_came_back_cancels_the_winding_too(self):
-        """AC-4 НЕГАТИВНЫЙ: просьба свернуться уже подана и вреда не несёт, а
-        вытирать чат из-под вернувшегося человека нельзя."""
-        machine = self.armed()
-        machine.wind(now=99.0, wall=1000.0)
-
-        assert machine.cancel(now=120.0) is True
-        assert machine.state == cycle.STATE_IDLE
-        assert machine.cooling_for(now=120.0) == cycle.CANCEL_QUIET
-
-    def test_our_own_request_is_not_a_human_coming_back(self):
-        """Наблюдатель печатает просьбу В ЧАТ, поэтому она ложится в транскрипт
-        репликой человека — и отменила бы уборку, которая её и послала."""
-        machine = self.armed()
-        machine.wind(now=99.0, wall=1000.0)
-
-        assert machine.echo_of_us(human_at=1000.5) is True
-        assert machine.echo_of_us(human_at=1010.0) is False  # это уже человек
-
-    def test_nothing_is_an_echo_before_the_request_was_sent(self):
-        """НЕГАТИВНЫЙ: до свёртки поблажки нет — иначе обычный обратный отсчёт
-        перестанет отменяться человеком."""
-        machine = self.armed()
-
-        assert machine.echo_of_us(human_at=1000.5) is False
-
-    def test_the_cycle_returns_to_idle_by_itself(self):
-        """AC-5: раньше из ARMED его выводила ложная отмена «человек вернулся»
-        тиком позже — она видна в логе после каждой удачной уборки. Без этой
-        случайности последовательность повторилась бы на следующем тике."""
-        machine = self.armed()
-        machine.wind(now=99.0, wall=1000.0)
-
-        machine.finish()
-
-        assert machine.state == cycle.STATE_IDLE
-        assert machine.awaiting_drop is True
-        assert machine.wound_up(standing_for=600.0, now=200.0) is False
 
 
 class TestTheAnchorTellsTheRunToDecideForItself:
@@ -498,3 +401,41 @@ class TestTheAnchorTellsTheRunToDecideForItself:
 
         assert after_wipe != standing
         assert "прими решение сам" not in after_wipe
+
+
+class TestTheCycleLetsGoOfItself:
+    """Раньше из ARMED цикл выводила только ложная отмена «человек вернулся в
+    чат», срабатывавшая тиком позже против собственной записи прогона — она
+    видна в логе через две секунды после каждой удачной уборки. Без этой
+    случайности последовательность повторялась бы каждый тик."""
+
+    def armed(self):
+        machine = cycle.Maintenance(threshold=50)
+        machine.consider(99, now=0.0)
+        assert machine.due(now=99.0) is True
+        return machine
+
+    def test_after_the_sequence_the_countdown_is_over(self):
+        machine = self.armed()
+
+        machine.finish()
+
+        assert machine.state == cycle.STATE_IDLE
+        assert machine.due(now=200.0) is False
+
+    def test_it_does_not_re_arm_on_the_same_reading(self):
+        """НЕГАТИВНЫЙ: окно должно быть увидено пустым, иначе застрявшее
+        показание взводит уборку на каждом тике — вживую наблюдалось трижды
+        подряд."""
+        machine = self.armed()
+        machine.finish()
+
+        assert machine.consider(99, now=300.0) is False
+
+    def test_a_window_that_dropped_arms_again(self):
+        """И обратная сторона: после падения окна механизм обязан ожить."""
+        machine = self.armed()
+        machine.finish()
+        machine.consider(10, now=300.0)  # окно увидено пустым
+
+        assert machine.consider(99, now=400.0) is True

@@ -13,6 +13,7 @@ The scanner is the same code it always was; only its address changed.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 
 from bash_cmd_norm import _MAX_WRAPPER_DEPTH, _interpreter_payloads
@@ -112,6 +113,53 @@ def _mentions_interpreter(tokens: list[str]) -> bool:
     return False
 
 
+# `<<EOF`, `<<-EOF`, `<< 'EOF'`, `<<"EOF"`. A here-STRING (`<<<word`) has no
+# body and deliberately does not match: the character after `<<` is `<`.
+_HEREDOC_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+
+
+def _strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
+    """Split a command line from the here-document bodies it feeds to stdin.
+
+    The whole scanner rests on token boundaries: a real command's words arrive
+    as separate tokens, a mention inside a quoted argument arrives as one. A
+    here-document breaks that rule outright, because `shlex` does not know the
+    construct — every word of the body arrives as its own token, so a commit
+    message reading «дальше git push -f в форк» is indistinguishable from the
+    command it describes. Measured: `scan_target` returned
+    `git commit -F - << EOF Дальше git push -f в форк. EOF`, and the force-push
+    rule fired on an ordinary commit.
+
+    The body is data — it is fed to the process's stdin, not run by the shell.
+    Whether anything then EXECUTES it is a property of that process, which is
+    why the caller re-scans bodies handed to an interpreter and drops the rest.
+
+    An unterminated here-document returns the command untouched with no bodies:
+    the same direction the rest of this module takes on input it cannot parse —
+    over-scanning is a false positive, under-scanning is a missed command.
+    """
+    if "<<" not in command:
+        return command, []
+    lines = command.split("\n")
+    kept: list[str] = []
+    bodies: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        kept.append(line)
+        i += 1
+        for _quote, delimiter in _HEREDOC_RE.findall(line):
+            body: list[str] = []
+            while i < len(lines) and lines[i].strip() != delimiter:
+                body.append(lines[i])
+                i += 1
+            if i >= len(lines):
+                return command, []  # no terminator: judge everything
+            i += 1  # the terminator line itself is not body
+            bodies.append("\n".join(body))
+    return "\n".join(kept), bodies
+
+
 def scan_target(command: str, depth: int = 0) -> str:
     """The part of `command` that can actually execute.
 
@@ -158,8 +206,12 @@ def scan_target(command: str, depth: int = 0) -> str:
     hidden behind a surviving quote is not descended into. `-EncodedCommand`
     (base64) is likewise a residual — it is not decoded here.
     """
+    # Here-document bodies are stdin, not a command line — see
+    # `_strip_heredoc_bodies`. Removed before tokenizing, because it is
+    # tokenizing that turns their prose into command-shaped words.
+    line, heredocs = _strip_heredoc_bodies(command)
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
         tokens = list(lexer)
     except ValueError:
@@ -181,4 +233,10 @@ def scan_target(command: str, depth: int = 0) -> str:
                     parts.append(scan_target(payload, depth + 1))
         else:
             parts.append(" ".join(_PAYLOAD if len(tok.split()) > 1 else tok for tok in sub))
+    # `bash <<EOF … EOF` really does execute its body, so an interpreter gets
+    # its here-document scanned as the command line it is — the same treatment
+    # a `-c` payload already gets, and for the same reason. Everything else is
+    # being handed data.
+    if heredocs and depth < _MAX_WRAPPER_DEPTH and _mentions_interpreter(tokens):
+        parts.extend(scan_target(body, depth + 1) for body in heredocs)
     return " ; ".join(parts)

@@ -58,9 +58,7 @@ from autoloop_chat_cycle import (
     sequence,
     turn_ended_at,
     wait_ready,
-    wind_down_step,
     anchor_step,
-    STATE_WINDING,
 )
 
 LOG_FILE = os.path.join(".tausik", "chat-watch.log")
@@ -96,15 +94,36 @@ def log(project_dir: str, message: str) -> None:
         pass
 
 
+# "Nobody asked" told apart from "asked, could not tell" — the two must not
+# collapse, because one is a caller that predates the question and the other is
+# a missing Stop-hook flag. Neither may veto a cleanup.
+_UNASKED = object()
+
+
 def should_act(
-    percent, threshold, quiet_for, idle_needed=IDLE_SECONDS, busy=False, hard=None
+    percent,
+    threshold,
+    quiet_for,
+    idle_needed=IDLE_SECONDS,
+    busy=False,
+    hard=None,
+    standing_for=_UNASKED,
 ) -> bool:
-    """Full window AND provably nobody typing AND no work still running.
+    """Full window AND provably nobody typing AND no work still running AND
+    the run itself standing.
 
     A quiet transcript means the TURN ended, not the work: an agent waiting on
     a test run it started writes nothing for minutes, and the cleanup landed in
     the middle of it. Not knowing counts as a person present; waiting on work is
     bounded by `hard`, or a job that never exits would silence this for good.
+
+    `standing_for` is the host's own answer to "is a turn in flight", taken from
+    the Stop hook's flag rather than from the file clock — the one signal the
+    transcript cannot give, because a long tool call looks exactly like an empty
+    room. Absent (`_UNASKED`) means nobody asked; None means the flag could not
+    be read, and neither may become a veto — a project without `chat_ready.py`
+    installed would otherwise never have its window cleaned again. So it can
+    only ever REFUSE a cleanup the other conditions already allowed.
     """
     if quiet_for is None:
         return False
@@ -112,6 +131,8 @@ def should_act(
         return False
     if busy and (hard is None or percent is None or percent < hard):
         return False
+    if standing_for is not _UNASKED and standing_for is not None:
+        return standing_for >= idle_needed
     return True
 
 
@@ -408,7 +429,6 @@ def watch(
                 blind=blind,
                 busy=busy,
                 arming=cycle.state != "idle",
-                winding=cycle.state == STATE_WINDING,
                 percent=percent,
                 threshold=threshold,
                 quiet=quiet,
@@ -440,7 +460,12 @@ def watch(
                 log(project_dir, "уборка по просьбе ждёт конца фоновой работы")
 
             if should_act(
-                percent, threshold, quiet, busy=busy, hard=config["hard_threshold"]
+                percent,
+                threshold,
+                quiet,
+                busy=busy,
+                hard=config["hard_threshold"],
+                standing_for=standing_seconds(turn_ended_at(project_dir), last_write, now_wall),
             ) and cycle.consider(percent, now):
                 armed_screen = keys.console_text(pid)
                 log(
@@ -455,14 +480,7 @@ def watch(
                 # "человек вернулся в чат" with nobody in the room, and cost
                 # ten minutes of cooldown on a full window.
                 human_quiet = human_idle_seconds(path)
-                human_at = None if human_quiet is None else now_wall - human_quiet
-                # The wind-down request is typed INTO the chat, so it lands as a
-                # turn from the human and would cancel the cleanup that sent it.
-                if (
-                    not cycle.echo_of_us(human_at)
-                    and (human_quiet is None or human_quiet < IDLE_SECONDS)
-                    and cycle.cancel(now=now)
-                ):
+                if (human_quiet is None or human_quiet < IDLE_SECONDS) and cycle.cancel(now=now):
                     # Someone started talking during the countdown; their turn wins.
                     log(project_dir, "отменено: человек вернулся в чат")
             if cycle.due(now):
@@ -473,40 +491,8 @@ def watch(
                     cycle.cancel(now=now)
                     log(project_dir, "отменено: экран чата изменился — человек печатает")
                 else:
-                    typed_at = time.time()  # before the keys: `deliver` waits for an answer
-                    sent, reason = deliver(
-                        project_dir, pid, *wind_down_step(run_direction(project_dir))
-                    )
-                    cycle.wind(now, typed_at)
-                    log(
-                        project_dir,
-                        "просил свернуть задачу — жду, пока прогон встанет"
-                        if sent
-                        else f"просьба свернуться не прошла ({reason}) — жду всё равно",
-                    )
-                    # Next tick, not this one. The silence measured above was
-                    # taken BEFORE the request was typed, so judging by it here
-                    # would wipe the window in the same breath as asking the run
-                    # to wind down — the request would never have been read.
-                    armed_screen = None
-                    time.sleep(POLL_SECONDS)
-                    continue
+                    run_sequence(project_dir, pid, cycle)
                 armed_screen = None
-            # The wipe itself, once the run has actually stopped. Asked of the
-            # Stop hook's flag rather than of the transcript: a quiet transcript
-            # means the turn ended, not the work.
-            if cycle.wound_up(
-                standing_seconds(turn_ended_at(project_dir), last_write, now_wall),
-                now,
-                busy=busy,
-            ):
-                log(
-                    project_dir,
-                    "задача не свернулась за отведённое время — убираю всё равно"
-                    if cycle.timed_out(now)
-                    else "прогон встал — убираю окно",
-                )
-                run_sequence(project_dir, pid, cycle)
             direction = run_direction(project_dir)
             if direction and anchor_due(
                 now,

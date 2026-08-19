@@ -37,7 +37,6 @@ MAX_WORKER_NAME = 22
 
 
 PHASE_COOLING = "cooling"  # over the threshold, but a refusal is still holding
-PHASE_WINDING = "winding"  # the run was asked to finish up; the wipe waits for it
 
 
 def phase_of(
@@ -48,7 +47,6 @@ def phase_of(
     percent=None,
     threshold=None,
     cooling: float = 0.0,
-    winding: bool = False,
 ) -> str:
     """Which state the watcher is in, in priority order.
 
@@ -58,19 +56,13 @@ def phase_of(
     a refusal still holding — and only then whether the window is over the
     threshold at all.
 
-    Winding outranks arming because it is the later half of the same countdown:
-    the request to finish up has already gone, and «взвожу уборку» would say
-    the opposite of what is happening.
-
     Cooling ranks below both because it is what «waiting» used to be mistaken
     for: over the threshold, quiet, and still not cleaning.
     """
     if blind:
         return PHASE_BLIND
-    if busy and not winding:
+    if busy:
         return PHASE_BUSY
-    if winding:
-        return PHASE_WINDING
     if arming:
         return PHASE_ARMING
     over = percent is not None and threshold is not None and percent >= threshold
@@ -112,8 +104,6 @@ def phrase(
         return f"жду фоновую работу · {workers} проц." if workers else "жду фоновую работу"
     if phase == PHASE_ARMING:
         return "взвожу уборку — говори, и отменю"
-    if phase == PHASE_WINDING:
-        return "просил свернуть задачу — жду, пока прогон встанет"
     if phase == PHASE_COOLING:
         return f"уборку отменили — предложу снова через {int(cooling)} с"
     if phase == PHASE_WAITING:
@@ -151,7 +141,6 @@ def observe(
     workers: int = 0,
     worker: str = "",
     cooling: float = 0.0,
-    winding: bool = False,
 ) -> bool:
     """Record this tick: the watcher reports FACTS, this module names them.
 
@@ -167,7 +156,6 @@ def observe(
         percent=percent,
         threshold=threshold,
         cooling=cooling,
-        winding=winding,
     )
     detail = phrase(
         phase,

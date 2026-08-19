@@ -160,10 +160,15 @@ def spin(monkeypatch, project_dir, *, human_quiet, ticks=4):
     monkeypatch.setattr(watch.keys, "console_text", lambda _pid: "> ")
     monkeypatch.setattr(watch.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(watch.time, "sleep", lambda _s: None)
-    monkeypatch.setattr(watch, "run_sequence", lambda *_a: ran.append("sequence") or True)
-    # Свёртка: просьба подаётся клавишами, а окно вытирается только когда
-    # прогон встал. Здесь закреплено и то и другое — эти тесты про другое.
-    monkeypatch.setattr(watch, "deliver", lambda *_a: (True, ""))
+    # Настоящий run_sequence возвращает цикл в idle через finish(); мок обязан
+    # делать то же, иначе отсчёт срабатывает повторно на следующем тике.
+    monkeypatch.setattr(
+        watch,
+        "run_sequence",
+        lambda _p, _pid, cycle_: (ran.append("sequence"), cycle_.finish(), True)[2],
+    )
+    # Уборка идёт, только когда прогон СТОИТ по флагу Stop-хука; эти тесты про
+    # то, кто написал в транскрипт, поэтому стояние закреплено.
     monkeypatch.setattr(watch, "standing_seconds", lambda *_a, **_k: 600.0)
     watch.watch(str(project_dir), pid=111, threshold=30)
     return ran, (project_dir / ".tausik" / "chat-watch.log").read_text(encoding="utf-8")

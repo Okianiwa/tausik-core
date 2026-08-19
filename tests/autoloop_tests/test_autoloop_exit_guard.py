@@ -8,7 +8,7 @@ from .conftest import assistant_entry
 
 from autoloop import autonomy as autonomy_mod
 from autoloop import exit_guard
-from autoloop.exit_guard import EXIT_HARD, EXIT_SOFT, decide
+from autoloop.exit_guard import EXIT_HARD, EXIT_SOFT, build_instruction, decide
 from autoloop.state import (
     STATE_COMPLETE,
     STATE_IDLE,
@@ -318,3 +318,48 @@ def test_without_a_run_the_guard_still_keeps_quiet(
 
     assert code == 0
     assert decision is None
+
+
+class TestAChatIsAskedMidTask:
+    """Дыра, из-за которой окно доползало до 50%: мягкая ветка ждала уже
+    закрытой задачи, поэтому посреди работы агенту не говорили ничего до
+    аварийного порога. Наблюдатель снаружи не заменяет хук — он взводится
+    после 45 с тишины, которых сплошная работа не даёт."""
+
+    def test_a_chat_is_asked_before_the_task_is_finished(self):
+        state = {"percent": 55.0, "task_state": STATE_IN_PROGRESS}
+
+        assert decide(state, CONFIG, interactive=True) == EXIT_SOFT
+
+    def test_a_headless_iteration_is_not_interrupted_mid_task(self):
+        """НЕГАТИВНЫЙ: итерация и так умирает после своей задачи, прерывать её
+        посреди работы — потерять сделанное и ничего не выиграть."""
+        state = {"percent": 55.0, "task_state": STATE_IN_PROGRESS}
+
+        assert decide(state, CONFIG, interactive=False) is None
+        assert decide(state, CONFIG) is None  # умолчание = агентный режим
+
+    def test_a_finished_task_is_asked_in_both_modes(self):
+        state = {"percent": 55.0, "task_state": STATE_COMPLETE}
+
+        assert decide(state, CONFIG, interactive=True) == EXIT_SOFT
+        assert decide(state, CONFIG, interactive=False) == EXIT_SOFT
+
+    def test_below_the_threshold_a_chat_is_left_alone(self):
+        """НЕГАТИВНЫЙ: снятие условия не должно превратиться в просьбу
+        свернуться на каждом ходу."""
+        state = {"percent": 12.0, "task_state": STATE_IN_PROGRESS}
+
+        assert decide(state, CONFIG, interactive=True) is None
+
+    def test_the_chat_text_does_not_claim_the_task_is_done(self):
+        """Текст приходит и посреди работы, поэтому утверждение «все шаги плана
+        закрыты» в нём было бы ложью."""
+        said = build_instruction(
+            EXIT_SOFT, {"percent": 55.0, "task_slug": "t1"}, CONFIG, interactive=True
+        )
+
+        assert "доведена до конца" not in said
+        assert "до логического конца" in said and "Новую задачу не начинай" not in said
+        assert "новую не начинай" in said
+        assert "task block" in said

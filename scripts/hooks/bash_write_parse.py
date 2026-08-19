@@ -25,7 +25,11 @@ if _HOOKS_DIR not in sys.path:
 # Imported from the scanner module, not from the hook. The hook now imports
 # `shell_channel`, which imports this file — reaching back into it would close
 # that loop into an import cycle.
-from bash_cmd_scan import _mentions_interpreter, _split_subcommands  # noqa: E402
+from bash_cmd_scan import (  # noqa: E402
+    _mentions_interpreter,
+    _split_subcommands,
+    _strip_heredoc_bodies,
+)
 
 # Redirection operators that create/append to a file. Matched against a single
 # shlex token, so a '>' living inside a quoted argument ("a > b") is one token
@@ -138,13 +142,33 @@ def tokenize(command: str) -> list[str] | None:
     picks a tokenizer itself is choosing a dialect by hand, and that is how the
     push gate came to read a PowerShell here-string with the POSIX lexer and
     find a `git push` in the prose of a commit message.
+
+    A here-document is the same illness on this dialect's own ground. `shlex`
+    does not know the construct, so every word of the body arrived as its own
+    token — and the push gate's whole defence is that a mention keeps its words
+    inside ONE quoted token. Measured: `git commit -F - <<'EOF' … git push … EOF`
+    tokenized to `[… '<<', 'EOF', 'git', 'push', …]` and an ordinary commit was
+    refused over the text of its own message. The body is stdin, so it leaves —
+    unless it is being fed to an interpreter, which is the case where the body
+    IS a command line and a push inside it is a real push.
     """
+    line, heredocs = _strip_heredoc_bodies(command)
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
-        return list(lexer)
+        tokens = list(lexer)
     except ValueError:
         return None
+    if not heredocs or not _mentions_interpreter(tokens):
+        return tokens
+    for body in heredocs:
+        try:
+            inner = shlex.shlex(body, posix=True, punctuation_chars=True)
+            inner.whitespace_split = True
+            tokens.extend(inner)
+        except ValueError:
+            return None  # a script we cannot read must not read as "nothing here"
+    return tokens
 
 
 def _redir_targets_regex(command: str) -> list[str]:

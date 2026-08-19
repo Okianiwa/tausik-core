@@ -122,26 +122,6 @@ def continue_step(direction: str):
     return (f"Продолжай прогон. Направление: {direction}", WAIT_SPEAKING)
 
 
-def wind_down_step(direction: str = ""):
-    """The step that asks the run to finish what it is doing and stop.
-
-    Before it, the cleanup landed wherever a 45-second pause happened to fall —
-    which inside a working turn means halfway through a task, with the window
-    wiped and the work remembered only by whatever had already reached the
-    database. The run itself was never told the window was filling up, so it
-    kept taking on more.
-
-    One line, no newlines: this is typed into a console, and a newline submits.
-    """
-    tail = f" Направление прогона: {direction}" if direction else ""
-    return (
-        "Контекст заполнен — окно скоро будет очищено. Доведи текущую задачу до "
-        "логического конца и остановись: закрой её штатно (relevant-files, verify, "
-        "task done --ac-verified), а если закрыть нельзя — запиши состояние в task log "
-        "и заблокируй с причиной. Новую задачу не начинай." + tail,
-        WAIT_SPEAKING,
-    )
-
 def anchor_step(direction: str = ""):
     """The step that un-sticks a run standing still, as opposed to a cleaned one.
 
@@ -189,20 +169,6 @@ CANCEL_QUIET = 600.0  # how long a refusal holds before offering again
 STATE_IDLE = "idle"
 STATE_ARMED = "armed"
 STATE_DONE = "done"
-
-
-STATE_WINDING = "winding"
-# How long a wind-down may take before the window is wiped anyway. A task that
-# will not close must not hold the cleanup for ever — that is the defect this
-# whole mechanism exists to answer, and a wind-down able to veto it would hand
-# it straight back.
-WIND_TIMEOUT = 1800.0
-# Silence that proves the run actually STOPPED rather than paused mid-step.
-# Same 45s the cleanup already required of the transcript.
-WIND_STANDING = 45.0
-# Tolerance for recognising the wind-down request as our own writing rather
-# than a person's. Seconds, because it brackets one keystroke delivery.
-WIND_ECHO = 5.0
 
 
 def flag_path(project_dir: str) -> str:
@@ -424,16 +390,12 @@ class Maintenance:
         threshold=30,
         arm_seconds=ARM_SECONDS,
         ready_timeout=READY_TIMEOUT,
-        wind_timeout=WIND_TIMEOUT,
     ):
         self.threshold = threshold
         self.arm_seconds = arm_seconds
         self.ready_timeout = ready_timeout
-        self.wind_timeout = wind_timeout
         self.state = STATE_IDLE
         self.armed_at: float | None = None
-        self.winding_at: float | None = None
-        self.winding_wall: float | None = None
         self.quiet_until = 0.0
         # After one cleanup the window must be seen empty before another is
         # offered. Without this a stuck reading re-arms on every tick and the
@@ -456,20 +418,11 @@ class Maintenance:
         """The human said no. Returns True when there was something to cancel.
 
         A refusal holds: asking again ten seconds later is the same as not
-        asking at all.
-
-        A wind-down can be cancelled too. The request to finish up has already
-        been delivered by then and costs nothing — the agent closing its task
-        is wanted either way — but wiping the window of somebody who just came
-        back is the thing this refusal exists to prevent, and it does not stop
-        being true because the countdown moved on a state.
-        """
-        if self.state not in (STATE_ARMED, STATE_WINDING):
+        asking at all."""
+        if self.state != STATE_ARMED:
             return False
         self.state = STATE_IDLE
         self.armed_at = None
-        self.winding_at = None
-        self.winding_wall = None
         self.quiet_until = now + quiet_for
         return True
 
@@ -490,60 +443,6 @@ class Maintenance:
             and (now - self.armed_at) >= self.arm_seconds
         )
 
-    def wind(self, now: float, wall: float | None = None) -> None:
-        """The countdown ran out: ask the run to finish, then wait for it.
-
-        `wall` is when the request was typed, in wall time. The watcher types
-        it into the chat, so it lands in the transcript as a turn from the
-        human — and the branch that cancels a cleanup because «somebody came
-        back» would fire against the watcher's own message, one tick after it
-        was sent. See `echo_of_us`.
-        """
-        self.state = STATE_WINDING
-        self.armed_at = None
-        self.winding_at = now
-        self.winding_wall = wall
-
-    def echo_of_us(self, human_at, grace: float = WIND_ECHO) -> bool:
-        """Is that last «human» turn the request this watcher just typed?
-
-        Only for the moment around the delivery: a person who types ten seconds
-        later is a person, and must still cancel. The request stays the newest
-        human turn for the rest of the wind-down, but by then it is older than
-        the silence the cancel requires, so it stops mattering on its own.
-        """
-        if self.winding_wall is None or human_at is None:
-            return False
-        return human_at <= self.winding_wall + grace
-
-    def wound_up(self, standing_for, now: float, busy: bool = False) -> bool:
-        """Has the run actually stopped — or waited long enough to be wiped anyway?
-
-        `standing_for` comes from the Stop hook's flag, not from the transcript:
-        a quiet transcript means the TURN ended, not the work, and wiping on it
-        was the original defect. None means the question could not be answered,
-        which is not an answer of «yes».
-
-        The timeout is the other half. A run that keeps finding one more thing
-        to do would otherwise hold the window for ever, and a full window that
-        is never cleaned is exactly what this mechanism was built against.
-        """
-        if self.state != STATE_WINDING or self.winding_at is None:
-            return False
-        if (now - self.winding_at) >= self.wind_timeout:
-            return True
-        if busy:
-            return False
-        return standing_for is not None and standing_for >= WIND_STANDING
-
-    def timed_out(self, now: float) -> bool:
-        """Whether the wipe about to happen is the impatient kind — for the log."""
-        return (
-            self.state == STATE_WINDING
-            and self.winding_at is not None
-            and (now - self.winding_at) >= self.wind_timeout
-        )
-
     def finish(self) -> None:
         """Back to idle after the sequence ran.
 
@@ -556,8 +455,6 @@ class Maintenance:
         """
         self.state = STATE_IDLE
         self.armed_at = None
-        self.winding_at = None
-        self.winding_wall = None
         self.awaiting_drop = True
 
     def run(self, send, ready, announce, confirm=None) -> bool:
