@@ -216,10 +216,17 @@ To check yourself without waiting for compaction:
 
 ```bash
 SID=$(state --self | python -c 'import json,sys; print(json.load(sys.stdin)["id"])')
-echo "{\"trigger\":\"manual\",\"cwd\":\"$PWD\",\"session_id\":\"$SID\"}" \
+echo "{\"trigger\":\"manual\",\"session_id\":\"$SID\"}" \
   | python ~/.claude/hooks/checkpoint.py guard
 echo $?   # 0 — compaction allowed, 2 — the guard did not accept the checkpoint
 ```
+
+⚠ **No `cwd` field here, and never `$PWD`.** Omitted, the hook takes the
+directory it is running in, which is right by construction. Handed `$PWD` from
+Git Bash it gets `/d/Sites_job/BigWork`, which Windows Python does not resolve —
+so `.claude/` is not found and the guard answers «there is no checkpoint» over a
+checkpoint that is lying right there. The hook now translates such a path, but
+a probe that lies about the thing it is probing is worth not writing twice.
 
 ## Step 6 — tell the owner
 
