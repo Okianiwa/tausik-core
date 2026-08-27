@@ -36,7 +36,13 @@ import sqlite3
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _common import cli_invocation, edited_file_paths, is_tausik_project  # noqa: E402
+from _common import (  # noqa: E402
+    cli_invocation,
+    edited_file_paths,
+    gate_exclude_globs,
+    is_tausik_project,
+    path_is_excluded,
+)
 
 
 def target_is_outside_project(raw_stdin: str, project_dir: str) -> bool:
@@ -81,6 +87,36 @@ def target_is_outside_project(raw_stdin: str, project_dir: str) -> bool:
             for p in paths
         )
     except Exception:  # noqa: BLE001 — any failure means "not proven outside" => keep gating
+        return False
+
+
+def target_is_excluded(raw_stdin: str, project_dir: str) -> bool:
+    """Whether every target of this call is declared harness bookkeeping.
+
+    Rule 1 is about CODE. A checkpoint pointer or a compaction log lives inside
+    the tree but is written by the harness for the harness, and gating it does
+    not protect the project — it silently stops the bookkeeping while the agent
+    reports success. What counts as bookkeeping is declared by the project, not
+    guessed here: see `gate_exclude_globs`, which ships empty.
+
+    FAIL-CLOSED like `target_is_outside_project`, and for the same reason: an
+    unparseable payload, an absent tool_input or any path arithmetic that
+    raises keeps the gate on, and ONE target that is not excluded keeps it on
+    for the whole call.
+    """
+    try:
+        globs = gate_exclude_globs(project_dir)
+        if not globs:
+            return False
+        payload = json.loads(raw_stdin) if raw_stdin.strip() else {}
+        tool_input = payload.get("tool_input")
+        if not isinstance(tool_input, dict):
+            return False
+        paths = edited_file_paths(tool_input)
+        if not paths:
+            return False
+        return all(path_is_excluded(p, project_dir, globs) for p in paths)
+    except Exception:  # noqa: BLE001 — any failure means "not proven bookkeeping" => keep gating
         return False
 
 
@@ -184,6 +220,9 @@ def main() -> int:
         return 0
 
     if target_is_outside_project(raw_stdin, project_dir):
+        return 0
+
+    if target_is_excluded(raw_stdin, project_dir):
         return 0
 
     db_path = os.path.join(project_dir, ".tausik", "tausik.db")

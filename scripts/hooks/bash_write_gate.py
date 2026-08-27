@@ -38,7 +38,12 @@ sys.path.insert(0, _HOOKS_DIR)
 sys.path.insert(1, os.path.dirname(_HOOKS_DIR))  # scripts/ — for scope_acl
 
 import shell_channel  # noqa: E402
-from _common import cli_invocation, is_tausik_project  # noqa: E402
+from _common import (  # noqa: E402
+    cli_invocation,
+    gate_exclude_globs,
+    is_tausik_project,
+    path_is_excluded,
+)
 from bash_write_parse import write_targets  # noqa: E402,F401 — re-exported for tests
 
 
@@ -105,6 +110,13 @@ def main() -> int:
         rel = _relative_to_project(cand, project_dir)
         if rel is not None and rel not in in_tree:
             in_tree.append(rel)
+    # Declared harness bookkeeping is not code, and Rule 1 is about code. The
+    # filter sits BEFORE the QG-0 verdict and before the scope-ACL check, so an
+    # excluded path is out of both — a checkpoint pointer belongs to no task's
+    # declared scope and never will. The list ships empty; see gate_exclude_globs.
+    excluded = gate_exclude_globs(project_dir)
+    if excluded:
+        in_tree = [p for p in in_tree if not path_is_excluded(p, project_dir, excluded)]
     if not in_tree:
         return 0  # no in-project write detected — nothing to gate
 

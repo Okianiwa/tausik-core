@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import re
@@ -294,6 +295,122 @@ def edited_file_paths(tool_input: dict) -> list[str]:
         # of the project into a guarded directory and compare unequal to it.
         paths.append(os.path.normpath(joined))
     return paths
+
+def tausik_config_path(project_dir: str) -> str:
+    """Канонический путь к `.tausik/config.json` — из `tausik_utils`, не копией.
+
+    Собрать его здесь `os.path.join` было бы пятой копией правила, а гейт
+    `test_no_inline_duplicates_in_production` ловит ровно это: копии
+    расходятся молча, и хук начинает читать не тот файл, который пишет CLI.
+    Хуки кладут в `sys.path` только свой каталог — родительский добавляем сами,
+    ровно как в `cli_invocation`.
+    """
+    parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if parent not in sys.path:
+        sys.path.append(parent)
+    from tausik_utils import tausik_config_path as _impl
+
+    return _impl(project_dir)
+
+
+_ENV_EXCLUDE_GLOBS = "TAUSIK_GATE_EXCLUDE_GLOBS"
+
+
+def _glob_segments_match(parts: list[str], pats: list[str]) -> bool:
+    """Segment-wise glob: `*` stays inside one path segment, `**` spans many.
+
+    `fnmatch` on the whole path would let `*` cross a slash, so a pattern
+    written to exempt one bookkeeping file (`.claude/*`) would quietly also
+    exempt `.claude/hooks/task_gate.py` — the gate's own code. An exclusion
+    that is wider than it reads is the failure mode worth spending ten lines on.
+    """
+    if not pats:
+        return not parts
+    if pats[0] == "**":
+        if len(pats) == 1:
+            return True
+        return any(_glob_segments_match(parts[i:], pats[1:]) for i in range(len(parts) + 1))
+    if not parts:
+        return False
+    # fnmatch (not fnmatchcase) so the match follows the platform: on Windows
+    # the same file answers to either case, and a case-sensitive exclusion
+    # there would hold on one machine and not on the next.
+    return fnmatch.fnmatch(parts[0], pats[0]) and _glob_segments_match(parts[1:], pats[1:])
+
+
+def gate_exclude_globs(project_dir: str) -> list[str]:
+    """Project-relative globs the write gates must not treat as code.
+
+    An agent harness keeps bookkeeping inside the tree it works on: a
+    checkpoint pointer the compaction guard reads back, a compaction log, a
+    handoff the next session picks up. The gates classify a target only as
+    «inside the tree / outside», so such a file is judged as source, and once
+    the last task is closed Rule 1 refuses to write it. The result is worse
+    than a refusal — the bookkeeping stops happening while every step of it
+    still reports success, and the loss shows up one compaction later.
+
+    Declared per project in `.tausik/config.json`:
+
+        {"gates": {"exclude_globs": [".claude/.checkpoint-*"]}}
+
+    and, for a harness that spans every project on the machine, in
+    `TAUSIK_GATE_EXCLUDE_GLOBS` (separated by `os.pathsep`). The two are
+    additive: the file states what this project needs, the variable what the
+    harness needs everywhere.
+
+    A catch-all is DROPPED, not honoured. `exclude_globs: ["**"]` turns Rule 1
+    off wholesale, and a rule switched off by one line of config is not a rule
+    — that line would also be the cheapest way out of any block, which is
+    exactly how gates get faked instead of satisfied.
+
+    Never raises: an unreadable or malformed config yields no exclusions, which
+    keeps every gate exactly as strict as it was before this existed.
+    """
+    raw: list[str] = []
+
+    cfg = tausik_config_path(project_dir)
+    try:
+        with open(cfg, encoding="utf-8") as f:
+            gates = json.load(f).get("gates")
+        if isinstance(gates, dict):
+            listed = gates.get("exclude_globs")
+            if isinstance(listed, list):
+                raw += [g for g in listed if isinstance(g, str)]
+    except (OSError, ValueError, AttributeError):
+        pass
+
+    raw += [g for g in os.environ.get(_ENV_EXCLUDE_GLOBS, "").split(os.pathsep) if g.strip()]
+
+    globs: list[str] = []
+    for g in raw:
+        pats = [p for p in g.strip().replace("\\", "/").strip("/").split("/") if p]
+        if not pats or set(pats) <= {"*", "**"}:
+            continue  # catch-all — see the docstring
+        joined = "/".join(pats)
+        if joined not in globs:
+            globs.append(joined)
+    return globs
+
+
+def path_is_excluded(path: str, project_dir: str, globs: list[str]) -> bool:
+    """Whether one write target is declared harness bookkeeping.
+
+    `path` may be absolute or project-relative; anything resolving outside the
+    project is NOT excluded here — jurisdiction over it is a separate question
+    each gate already answers on its own.
+    """
+    if not globs:
+        return False
+    try:
+        expanded = os.path.expanduser(path)
+        full = expanded if os.path.isabs(expanded) else os.path.join(project_dir, expanded)
+        rel = os.path.relpath(os.path.normpath(full), project_dir)
+    except (ValueError, OSError):  # e.g. another drive on Windows
+        return False
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        return False
+    parts = [p for p in rel.replace("\\", "/").split("/") if p and p != "."]
+    return any(_glob_segments_match(parts, g.split("/")) for g in globs)
 
 
 def edited_file_path(tool_input: dict) -> str:

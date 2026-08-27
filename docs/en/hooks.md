@@ -125,6 +125,45 @@ Agent: tausik task done my-button --ac-verified
 - `dd if=/dev/zero`, `mkfs.` — disk formatting
 - Fork bombs
 
+## Harness bookkeeping — exemptions from Rule 1
+
+An agent harness keeps its own records INSIDE the tree it works on: a checkpoint
+pointer the compaction guard reads back, a log of compaction summaries, a handoff
+for the next session. Both write gates classify a target only as «inside the tree
+/ outside», so such a file is judged as source, and once the last task is closed
+Rule 1 refuses to write it. The refusal is not the damage — the bookkeeping stops
+while every step of it still reports success, and the loss surfaces one
+compaction later.
+
+What counts as bookkeeping is declared by the project, never guessed by the gate.
+The list ships empty.
+
+`.tausik/config.json`:
+
+```json
+{"gates": {"exclude_globs": [".claude/.checkpoint-*", ".claude/compact-summaries/**"]}}
+```
+
+For a harness that spans every project on the machine, use the environment
+variable `TAUSIK_GATE_EXCLUDE_GLOBS` (separated by `os.pathsep`: `;` on Windows,
+`:` on POSIX). The two sources are additive: the file states what this project
+needs, the variable what the harness needs everywhere.
+
+How a pattern reads:
+
+- `*` does not cross a `/`. `.claude/*` covers files directly in `.claude` but
+  NOT `.claude/hooks/task_gate.py` — the gate's own code.
+- `**` spans any number of levels: `.claude/compact-summaries/**`.
+- A path outside the project is not excluded here — jurisdiction over it is a
+  separate question each gate answers on its own.
+- A catch-all pattern (`**`, `*`, `**/*`) is DROPPED. A rule switched off by one
+  line of config is not a rule: that line would be the cheapest way out of any
+  block.
+
+All-or-nothing: if a call writes two files and even one of them is not excluded,
+the gate stays on for the whole call. An unreadable or malformed config yields no
+exclusions — exactly the strictness that held before this existed.
+
 ## Disabling Hooks
 
 For testing or debugging: set `TAUSIK_SKIP_HOOKS=1`.
