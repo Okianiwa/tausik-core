@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
 from typing import Any
+
+# What bootstrap deployed into `<target>/skills/` last time — the only
+# skills it may later prune. Project-owned skills are never listed here.
+DEPLOY_MANIFEST = ".tausik-deployed.json"
 
 # Skill-specific helpers live in bootstrap_skill_helpers (extracted in
 # v14b polish Phase B to keep this module under the 400-line filesize
@@ -223,15 +228,41 @@ def copy_skills(
         else:
             missing.append(skill)
 
+    # Prune ONLY what TAUSIK itself put here and no longer ships. Until
+    # 2026-09-23 every directory outside the current set was removed, which
+    # wiped project-owned skills TAUSIK never deployed — `web-visual` in
+    # D:\Weblog(Durka) twice (2026-09-04, 2026-09-13, ratchet-log). A skill is
+    # ours if it is a builtin (gated ones included), a registry stub name, or
+    # was recorded in the previous deployment manifest. Anything else belongs
+    # to the project and is left alone.
     preserve = set(all_skills_with_vendor)
+    manifest_path = os.path.join(skills_dst, DEPLOY_MANIFEST)
+    previously_deployed: set[str] = set()
+    try:
+        with open(manifest_path, encoding="utf-8") as f:
+            previously_deployed = set(json.load(f).get("skills", []))
+    except (OSError, ValueError, AttributeError):
+        pass
+    all_builtin: set[str] = set()
+    if os.path.isdir(builtin_dir):
+        all_builtin = {
+            n for n in os.listdir(builtin_dir)
+            if os.path.isdir(os.path.join(builtin_dir, n)) and not n.startswith((".", "_"))
+        }
+    ours = previously_deployed | all_builtin | registry_names
     if os.path.isdir(skills_dst):
         for existing in os.listdir(skills_dst):
             existing_path = os.path.join(skills_dst, existing)
-            if os.path.isdir(existing_path) and existing not in preserve:
+            if os.path.isdir(existing_path) and existing not in preserve and existing in ours:
                 if sys.version_info >= (3, 12):
                     shutil.rmtree(existing_path, onexc=_on_rmtree_exc)
                 else:
                     shutil.rmtree(existing_path, onerror=_on_rmtree_error)
+    try:
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump({"skills": sorted(preserve)}, f, ensure_ascii=False, indent=1)
+    except OSError as e:
+        print(f"  Warning: could not write {manifest_path}: {e}", file=sys.stderr)
 
     # Validate frontmatter of all copied skills
     if os.path.isdir(skills_dst):

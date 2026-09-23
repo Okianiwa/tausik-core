@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import tarfile
 import tempfile
 
@@ -524,7 +525,33 @@ class TestBootstrapPreservesVendorSkills:
         # Vendor skill should survive
         assert os.path.exists(os.path.join(target_dir, "skills", "ui-ux-pro-max", "SKILL.md"))
 
-    def test_non_vendor_skill_cleaned_up(self, tmp_dir):
+    def test_skill_dropped_from_tausik_is_cleaned_up(self, tmp_dir):
+        """A skill TAUSIK deployed earlier and no longer ships is pruned."""
+        from bootstrap_copy import copy_skills
+
+        lib_dir = os.path.join(tmp_dir, "lib")
+        for name in ("start", "retired"):
+            d = os.path.join(lib_dir, "harness", "skills", name)
+            os.makedirs(d)
+            with open(os.path.join(d, "SKILL.md"), "w") as f:
+                f.write(f"# {name}")
+
+        target_dir = os.path.join(tmp_dir, "target")
+        config = {"core_skills": ["start"], "extension_skills": [], "vendor_activated": []}
+        copy_skills(lib_dir, target_dir, config, "claude")
+        assert os.path.exists(os.path.join(target_dir, "skills", "retired", "SKILL.md"))
+
+        # The framework drops the skill: the next bootstrap removes our copy.
+        shutil.rmtree(os.path.join(lib_dir, "harness", "skills", "retired"))
+        copy_skills(lib_dir, target_dir, config, "claude")
+        assert not os.path.exists(os.path.join(target_dir, "skills", "retired"))
+
+    def test_project_owned_skill_survives(self, tmp_dir):
+        """A skill TAUSIK never deployed belongs to the project and stays.
+
+        Regression 2026-09-04 and 2026-09-13: `--sync --bootstrap` wiped the
+        project skill `web-visual` in D:\\Weblog(Durka) — twice.
+        """
         from bootstrap_copy import copy_skills
 
         lib_dir = os.path.join(tmp_dir, "lib")
@@ -534,20 +561,16 @@ class TestBootstrapPreservesVendorSkills:
             f.write("# Start")
 
         target_dir = os.path.join(tmp_dir, "target")
-        # Pre-create an orphan skill
-        orphan = os.path.join(target_dir, "skills", "orphan-skill")
-        os.makedirs(orphan)
-        with open(os.path.join(orphan, "SKILL.md"), "w") as f:
-            f.write("# Orphan")
+        own = os.path.join(target_dir, "skills", "web-visual")
+        os.makedirs(own)
+        with open(os.path.join(own, "SKILL.md"), "w") as f:
+            f.write("# Project's own skill")
 
-        config = {
-            "core_skills": ["start"],
-            "extension_skills": [],
-            "vendor_activated": [],
-        }
+        config = {"core_skills": ["start"], "extension_skills": [], "vendor_activated": []}
         copy_skills(lib_dir, target_dir, config, "claude")
-        # Orphan should be cleaned up
-        assert not os.path.exists(os.path.join(target_dir, "skills", "orphan-skill"))
+        copy_skills(lib_dir, target_dir, config, "claude")
+        with open(os.path.join(own, "SKILL.md")) as f:
+            assert f.read() == "# Project's own skill"
 
     def test_repeated_bootstrap_preserves_vendor(self, tmp_dir):
         """Simulate two bootstrap runs — vendor skill should survive both."""
