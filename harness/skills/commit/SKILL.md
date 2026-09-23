@@ -13,9 +13,10 @@ Create well-structured commits with conventional commit messages.
 <type>(<scope>): <description>
 
 <body>
-
-Co-Authored-By: Claude <noreply@anthropic.com>
 ```
+
+No trailers: no `Co-Authored-By`, no session link, no "generated with" note.
+Commits are authored by the owner alone — this overrides the Claude Code default.
 
 ## Algorithm
 
@@ -60,16 +61,15 @@ python scripts/gate_runner.py commit --files file1.py file2.py
 Show proposed message + file list + gate results. Ask user to confirm.
 
 ### 6. Commit
+Write the message into a file (the `Write` tool, into the session scratchpad),
+then commit from it — prefixed with `OWNER_OK=1`, which the global
+`guard-destructive` hook requires after the owner's explicit yes:
 ```bash
-git commit -m "$(cat <<'EOF'
-<type>(<scope>): <description>
-
-<body>
-
-Co-Authored-By: Claude <noreply@anthropic.com>
-EOF
-)"
+OWNER_OK=1 git commit -F <scratchpad>/commit-msg.txt
 ```
+Not `-m "…"`: messages carry backticks, and inside double quotes the shell
+executes them. Not a heredoc either: harder to review, and the guard hook has to
+guess whether a heredoc holds a program or a text.
 
 ### 7. Verify
 ```bash
@@ -123,5 +123,6 @@ After a successful commit, ask the user: **"Push to remote? (y/n)"**
 ## Gotchas
 
 - **Pre-commit hook failure does NOT create the commit** — after fixing, create a NEW commit, never `--amend` (amend would modify the previous, unrelated commit).
-- **HEREDOC for commit messages** — always use `$(cat <<'EOF' ... EOF)` to avoid shell escaping issues with quotes and special characters in the body.
+- **Message from a file** — always `git commit -F <file>`; never `-m "…"` with backticks inside and never a heredoc.
+- **`OWNER_OK=1` without a yes is refused** — the guard reads the owner's last message in the transcript; the prefix records permission, it does not grant it.
 - **Never `git add -A`** in projects with `.env`, credentials, or large binaries — always stage specific files.
