@@ -14,8 +14,11 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from _common import edited_file_path  # noqa: E402
+    from _common import edited_file_path, paths_outside_project  # noqa: E402
 except ImportError:  # pragma: no cover - formatting is best-effort
+
+    def paths_outside_project(paths: list, project_dir: str) -> bool:
+        return False
 
     def edited_file_path(tool_input: dict) -> str:
         if not isinstance(tool_input, dict):
@@ -57,6 +60,15 @@ def main() -> int:
         return 0
 
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
+
+    # A sibling repository keeps its own style and its own task log: formatting
+    # it from here rewrote whole files there (a 20-line edit became a 240-line diff).
+    try:
+        foreign = paths_outside_project([file_path], project_dir)
+    except ValueError:  # another drive — outside by definition
+        foreign = True
+    if foreign:
+        return 0
 
     # Auto-format by extension
     _, ext = os.path.splitext(file_path)

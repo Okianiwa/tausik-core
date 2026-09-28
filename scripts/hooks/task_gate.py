@@ -42,6 +42,7 @@ from _common import (  # noqa: E402
     gate_exclude_globs,
     is_tausik_project,
     path_is_excluded,
+    paths_outside_project,
 )
 
 
@@ -75,17 +76,11 @@ def target_is_outside_project(raw_stdin: str, project_dir: str) -> bool:
         # a serena edit names `relative_path`, a FileSystem move `destination`.
         # Reading only `file_path` here made those calls "not proven outside",
         # which gates another repository's files — the defect this guards.
-        paths = edited_file_paths(tool_input)
+        paths = edited_file_paths(tool_input, payload.get("tool_name") or "")
         if not paths:
             return False
-        # Relative paths belong to the project by definition of the cwd the hook
-        # runs in, so they resolve against project_dir and stay gated. ALL of
-        # them must be outside: one target inside keeps the gate on.
-        root = os.path.realpath(project_dir)
-        return all(
-            os.path.commonpath([os.path.realpath(os.path.join(project_dir, p)), root]) != root
-            for p in paths
-        )
+        # ALL of them must be outside: one target inside keeps the gate on.
+        return paths_outside_project(paths, project_dir)
     except Exception:  # noqa: BLE001 — any failure means "not proven outside" => keep gating
         return False
 
@@ -112,7 +107,7 @@ def target_is_excluded(raw_stdin: str, project_dir: str) -> bool:
         tool_input = payload.get("tool_input")
         if not isinstance(tool_input, dict):
             return False
-        paths = edited_file_paths(tool_input)
+        paths = edited_file_paths(tool_input, payload.get("tool_name") or "")
         if not paths:
             return False
         return all(path_is_excluded(p, project_dir, globs) for p in paths)

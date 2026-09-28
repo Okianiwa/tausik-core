@@ -31,6 +31,7 @@ def cli_invocation() -> str:
     except Exception:  # noqa: BLE001 — a hint must never break the gate it explains
         return ".tausik/tausik"
 
+
 # Tool names a guard has to know about, kept here rather than re-listed in
 # every hook: the matchers in bootstrap_hooks.py and these sets are two
 # independent filters, and a call has to clear BOTH. When they drift, the
@@ -55,6 +56,58 @@ FILE_WRITE_TOOL_NAMES = frozenset(
         "mcp__serena__safe_delete_symbol",
     }
 )
+
+# A serena server serves one project, so a session that works on a second tree
+# runs a second server — `serena-<name>` in .mcp.json, tools `mcp__serena-<name>__*`.
+# Its editors write files exactly like the first one's; a guard that knows only
+# the literal `mcp__serena__` names lets them through unread.
+SERENA_WRITE_OPS = frozenset(
+    {
+        "replace_symbol_body",
+        "replace_content",
+        "insert_after_symbol",
+        "insert_before_symbol",
+        "rename_symbol",
+        "safe_delete_symbol",
+    }
+)
+_SERENA_TOOL = re.compile(r"^mcp__(serena(?:-[A-Za-z0-9-]+)?)__([A-Za-z_]+)$")
+
+
+def is_file_write_tool(tool_name: str) -> bool:
+    """FILE_WRITE_TOOL_NAMES plus the editors of every `serena-<name>` server."""
+    if tool_name in FILE_WRITE_TOOL_NAMES:
+        return True
+    match = _SERENA_TOOL.match(tool_name or "")
+    return bool(match) and match.group(2) in SERENA_WRITE_OPS
+
+
+def serena_project_root(tool_name: str, project_dir: str) -> str | None:
+    """The tree a serena tool's `relative_path` is relative to; None if unknown.
+
+    The plain `serena` server is bound to the session's own project. A second
+    one is declared in the project's .mcp.json with `--project <path>`, and
+    that path is its root. Unknown means the caller keeps resolving against
+    project_dir — the path then stays inside the project and stays gated.
+    """
+    match = _SERENA_TOOL.match(tool_name or "")
+    if not match:
+        return None
+    server = match.group(1)
+    if server == "serena":
+        return project_dir
+    try:
+        with open(os.path.join(project_dir, ".mcp.json"), encoding="utf-8") as f:
+            args = json.load(f)["mcpServers"][server]["args"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    for i, arg in enumerate(args):
+        if arg == "--project" and i + 1 < len(args) and isinstance(args[i + 1], str):
+            return args[i + 1]
+        if isinstance(arg, str) and arg.startswith("--project="):
+            return arg.split("=", 1)[1]
+    return None
+
 
 # Built-in writers carry the target path in a field we know how to read.
 BUILTIN_FILE_WRITE_TOOL_NAMES = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
@@ -272,18 +325,21 @@ def has_active_task(project_dir: str, timeout: int = 4) -> bool:
 _PATH_FIELDS = ("file_path", "notebook_path", "path", "relative_path", "destination")
 
 
-def edited_file_paths(tool_input: dict) -> list[str]:
+def edited_file_paths(tool_input: dict, tool_name: str = "") -> list[str]:
     """Return every path this call could write to, absolute, in field order.
 
     Returns a list rather than one path because FileSystem move/copy names
     two, and the destination is the one that matters. Relative paths (serena
-    speaks them) are resolved against CLAUDE_PROJECT_DIR — left relative they
-    would never compare equal to a guarded absolute location, so the guard
-    would match, find a path, and still wave the write through.
+    speaks them) are resolved against the serving server's root — the project
+    for plain `serena`, its `--project` for `serena-<name>` — and against
+    CLAUDE_PROJECT_DIR otherwise. Left relative they would never compare equal
+    to a guarded absolute location, so the guard would match, find a path,
+    and still wave the write through.
     """
     if not isinstance(tool_input, dict):
         return []
-    project_dir = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    session_dir = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    project_dir = serena_project_root(tool_name, session_dir) or session_dir
     paths: list[str] = []
     for key in _PATH_FIELDS:
         value = tool_input.get(key)
@@ -295,6 +351,24 @@ def edited_file_paths(tool_input: dict) -> list[str]:
         # of the project into a guarded directory and compare unequal to it.
         paths.append(os.path.normpath(joined))
     return paths
+
+
+def paths_outside_project(paths: list[str], project_dir: str) -> bool:
+    """True only when EVERY path lies outside project_dir; False for none.
+
+    Containment is decided on realpath via commonpath, NOT startswith: with a
+    plain prefix test a sibling directory sharing a prefix (``…/core-old`` next
+    to ``…/core``) reads as inside, and a symlink pointing from outside into the
+    project reads as outside. Relative paths resolve against project_dir and so
+    count as inside. Raises ValueError for another drive on Windows — the
+    caller decides which way its own uncertainty falls.
+    """
+    root = os.path.realpath(project_dir)
+    return bool(paths) and all(
+        os.path.commonpath([os.path.realpath(os.path.join(project_dir, p)), root]) != root
+        for p in paths
+    )
+
 
 def tausik_config_path(project_dir: str) -> str:
     """Канонический путь к `.tausik/config.json` — из `tausik_utils`, не копией.

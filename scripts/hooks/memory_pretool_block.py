@@ -46,8 +46,8 @@ sys.path.insert(0, _HOOKS_DIR)
 sys.path.insert(1, os.path.dirname(_HOOKS_DIR))  # scripts/ — for memory_sinks
 
 from _common import (  # noqa: E402
-    FILE_WRITE_TOOL_NAMES,
     edited_file_paths,
+    is_file_write_tool,
     is_tausik_project,
     last_user_prompt_text,
     marker_present_anchored,
@@ -61,9 +61,6 @@ from memory_sinks import (  # noqa: E402
 )
 
 _BYPASS_MARKER = "confirm: cross-project"
-# Every tool that writes a file, not the three built-ins: serena's symbol
-# editors and the MCP writers reach ~/.claude/**/memory/ just as well.
-_PATH_TOOLS = FILE_WRITE_TOOL_NAMES
 
 
 def _read_stdin_json() -> dict:
@@ -137,10 +134,13 @@ def _targets(event: dict, project_dir: str) -> list[str]:
     tool_input = event.get("tool_input")
     if not isinstance(tool_input, dict):
         return []
-    if tool in _PATH_TOOLS:
+    # Every tool that writes a file, not the three built-ins: serena's symbol
+    # editors (of any serena-<name> server) and the MCP writers reach
+    # ~/.claude/**/memory/ just as well.
+    if is_file_write_tool(tool):
         # Every path field a writer can carry (file_path / notebook_path /
         # path / relative_path / destination), not just the first one.
-        return list(edited_file_paths(tool_input))
+        return list(edited_file_paths(tool_input, tool))
     # Which shells carry a command is `shell_channel`'s answer. The literal
     # `!= "Bash"` that stood here covered exactly one of the two shell tools the
     # agent is handed on win32, so `Set-Content ~/.claude/.../memory/x.md` — the
@@ -215,7 +215,8 @@ def main() -> int:
     event = _read_stdin_json()
     import shell_channel  # noqa: PLC0415
 
-    if event.get("tool_name") not in (*_PATH_TOOLS, *shell_channel.SHELL_TOOLS):
+    tool = event.get("tool_name") or ""
+    if not is_file_write_tool(tool) and tool not in shell_channel.SHELL_TOOLS:
         return 0
 
     targets = _targets(event, project_dir)

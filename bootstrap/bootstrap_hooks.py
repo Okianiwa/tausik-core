@@ -36,7 +36,8 @@ from typing import Any, Callable
 _FILE_WRITE_TOOLS = (
     "Write|Edit|MultiEdit|NotebookEdit"
     "|mcp__windows-mcp__FileSystem"
-    "|mcp__serena__(?:replace_symbol_body|replace_content"
+    # serena-<name>: a second serena server bound to another tree (see _common.SERENA_WRITE_OPS)
+    "|mcp__serena(?:-[A-Za-z0-9-]+)?__(?:replace_symbol_body|replace_content"
     "|insert_after_symbol|insert_before_symbol"
     "|rename_symbol|safe_delete_symbol)"
 )
