@@ -70,8 +70,11 @@ AC_SECTION_HEADING_RE = re.compile(r"^\s*AC[-\s]*(\d+)\b", re.IGNORECASE)
 # "AC-1:" token (which carries the number itself and is matched elsewhere).
 TIMESTAMP_PREFIX_RE = re.compile(r"^\s*\[[^\]]*\]\s*")
 AC_HEADER_PREFIX_RE = re.compile(r"^\s*AC(?:\s+[a-zA-Z]+)?\s*:\s*", re.IGNORECASE)
+# A Pest test is named by its description, which has spaces — so a PHP citation
+# quotes it: tests/Feature/XTest.php::"does the thing".
 TEST_REF_RE = re.compile(
-    r"(tests?/[\w/.\-]+\.py(?:::[\w_]+)?|test_[\w_]+\.py(?:::[\w_]+)?)",
+    r"(tests?/[\w/.\-]+\.py(?:::[\w_]+)?|test_[\w_]+\.py(?:::[\w_]+)?"
+    r"|tests?/[\w/.\-]+\.php(?:::(?:[\w_]+|\"[^\"\n]+\"|'[^'\n]+'))?)",
     re.IGNORECASE,
 )
 # MEASUREMENT — the strongest evidence in the project (a real gate run) was the

@@ -97,16 +97,13 @@ def serena_project_root(tool_name: str, project_dir: str) -> str | None:
     if server == "serena":
         return project_dir
     try:
-        with open(os.path.join(project_dir, ".mcp.json"), encoding="utf-8") as f:
-            args = json.load(f)["mcpServers"][server]["args"]
-    except (OSError, ValueError, KeyError, TypeError):
+        parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if parent not in sys.path:
+            sys.path.append(parent)
+        from tausik_utils import mcp_server_projects
+    except Exception:  # noqa: BLE001 — unknown root keeps the path inside the project, still gated
         return None
-    for i, arg in enumerate(args):
-        if arg == "--project" and i + 1 < len(args) and isinstance(args[i + 1], str):
-            return args[i + 1]
-        if isinstance(arg, str) and arg.startswith("--project="):
-            return arg.split("=", 1)[1]
-    return None
+    return mcp_server_projects(project_dir).get(server)
 
 
 # Built-in writers carry the target path in a field we know how to read.

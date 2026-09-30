@@ -10,6 +10,34 @@ from datetime import datetime, timezone
 from typing import Any
 
 
+def mcp_server_projects(project_dir: str) -> dict[str, str]:
+    """Server name → its `--project` path, for every server in the project's .mcp.json.
+
+    One reading of that file for the hooks (which tree a `serena-<name>` tool
+    edits) and for the AC gate (which tree a cited test may live in).
+    """
+    try:
+        with open(os.path.join(project_dir, ".mcp.json"), encoding="utf-8") as f:
+            servers = json.load(f)["mcpServers"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+    if not isinstance(servers, dict):
+        return {}
+    projects: dict[str, str] = {}
+    for name, spec in servers.items():
+        args = spec.get("args") if isinstance(spec, dict) else None
+        if not isinstance(args, list):
+            continue
+        for i, arg in enumerate(args):
+            if arg == "--project" and i + 1 < len(args) and isinstance(args[i + 1], str):
+                projects[name] = args[i + 1]
+                break
+            if isinstance(arg, str) and arg.startswith("--project="):
+                projects[name] = arg.split("=", 1)[1]
+                break
+    return projects
+
+
 def cli_invocation(environ: dict[str, str] | None = None, os_name: str | None = None) -> str:
     """How to spell the TAUSIK CLI so the reader's shell will accept it.
 

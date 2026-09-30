@@ -38,6 +38,26 @@ def _project_root(root: str | None = None) -> str:
         return os.getcwd()
 
 
+def _code_roots(root: str | None = None) -> list[str]:
+    """The project root, then the tree of every `serena-<name>` server in its .mcp.json.
+
+    A project may govern code that lives in a sibling repository (BigWork plans
+    the MIS, whose Pest tests sit in D:/Sites_job/mis-etalon). That repository
+    is already declared once — as the `--project` of a second serena server —
+    and the hooks read it from there; this reads the same declaration rather
+    than inventing a second setting that could drift from it.
+    """
+    from tausik_utils import mcp_server_projects
+
+    base = _project_root(root)
+    siblings = [
+        path
+        for name, path in mcp_server_projects(base).items()
+        if name.startswith("serena-") and os.path.isdir(path)
+    ]
+    return [base, *siblings]
+
+
 def _test_ref_exists(ref: str, root: str | None = None) -> bool:
     """True when `tests/foo.py::test_bar` names a real test inside `tests/`.
 
@@ -64,7 +84,10 @@ def _test_ref_exists(ref: str, root: str | None = None) -> bool:
     path = ref.split("::", 1)[0].strip()
     if not path:
         return False
-    base = os.path.abspath(_project_root(root))
+    return any(_ref_exists_under(os.path.abspath(base), path, ref) for base in _code_roots(root))
+
+
+def _ref_exists_under(base: str, path: str, ref: str) -> bool:
     tests_dir = os.path.join(base, "tests")
     candidate = os.path.normpath(os.path.join(base, path))
     if not os.path.isfile(candidate):
@@ -102,7 +125,12 @@ def _named_test_defined(path: str, ref: str) -> bool:
             source = fh.read()
     except OSError:
         return False  # unreadable → unverifiable → fail closed
+    is_php = path.lower().endswith(".php")
     for segment in segments:
+        if is_php:
+            if not _php_test_defined(source, segment):
+                return False
+            continue
         name = segment.split("[", 1)[0].strip()
         if not name:
             continue
@@ -113,4 +141,13 @@ def _named_test_defined(path: str, ref: str) -> bool:
         ):
             return False
     return True
+
+
+def _php_test_defined(source: str, segment: str) -> bool:
+    """Pest `it('…')` / `test('…')` for a quoted segment, else a PHPUnit method or class."""
+    if len(segment) >= 2 and segment[0] == segment[-1] and segment[0] in "\"'":
+        description = re.escape(segment[1:-1])
+        return bool(re.search(rf"\b(?:it|test)\(\s*(['\"]){description}\1", source))
+    name = re.escape(segment)
+    return bool(re.search(rf"\b(?:function|class)\s+{name}\b", source))
 

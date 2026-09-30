@@ -11,6 +11,7 @@ and a cwd-dependent root — so a regression re-opening any of them reddens CI.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -18,7 +19,9 @@ _SCRIPTS = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "script
 if _SCRIPTS not in sys.path:
     sys.path.insert(0, _SCRIPTS)
 
+from ac_evidence_detectors import TEST_REF_RE  # noqa: E402
 from gate_test_citation import (  # noqa: E402
+    _code_roots,
     _named_test_defined,
     _project_root,
     _test_ref_exists,
@@ -122,6 +125,70 @@ class TestNamedTestDefined:
     def test_unreadable_file_fails_closed(self, tmp_path):
         missing = os.path.join(str(tmp_path), "gone.py")
         assert _named_test_defined(missing, "gone.py::test_alpha") is False
+
+
+# ------------------------------------------- sibling repository and PHP tests ---
+
+
+def _make_sibling(tmp_path):
+    """A planning project whose .mcp.json binds `serena-app` to a PHP repo with Pest and PHPUnit tests."""
+    app = tmp_path / "app"
+    (app / "tests" / "Feature").mkdir(parents=True)
+    (app / "tests" / "Feature" / "LoginTest.php").write_text(
+        "<?php\n"
+        "it('asks for a code after a correct password', function () {});\n"
+        'test("refuses a stale code", function () {});\n'
+        "class LoginUnitTest extends TestCase {\n"
+        "    public function test_locks_after_five_failures(): void {}\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (app / "src").mkdir()
+    (app / "src" / "Login.php").write_text("<?php\nfunction handle() {}\n", encoding="utf-8")
+    plan = tmp_path / "plan"
+    plan.mkdir()
+    (plan / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"serena-app": {"args": ["start-mcp-server", "--project", str(app)]}}}),
+        encoding="utf-8",
+    )
+    return str(plan)
+
+
+class TestSiblingRepository:
+    def test_pest_description_in_sibling_resolves(self, tmp_path):
+        root = _make_sibling(tmp_path)
+        ref = "tests/Feature/LoginTest.php::\"asks for a code after a correct password\""
+        assert _test_ref_exists(ref, root=root) is True
+        assert _test_ref_exists("tests/Feature/LoginTest.php::'refuses a stale code'", root=root) is True
+
+    def test_phpunit_method_resolves(self, tmp_path):
+        root = _make_sibling(tmp_path)
+        assert _test_ref_exists("tests/Feature/LoginTest.php::test_locks_after_five_failures", root=root) is True
+
+    def test_invented_pest_description_fails(self, tmp_path):
+        root = _make_sibling(tmp_path)
+        assert _test_ref_exists("tests/Feature/LoginTest.php::\"logs in without a code\"", root=root) is False
+
+    def test_traversal_out_of_sibling_tests_fails(self, tmp_path):
+        root = _make_sibling(tmp_path)
+        assert _test_ref_exists("tests/../src/Login.php::handle", root=root) is False
+
+    def test_no_mcp_json_means_project_root_only(self, tmp_path):
+        assert _code_roots(str(tmp_path)) == [str(tmp_path)]
+
+    def test_plain_serena_and_other_servers_add_no_root(self, tmp_path):
+        (tmp_path / ".mcp.json").write_text(
+            json.dumps({"mcpServers": {"serena": {"args": ["--project", str(tmp_path / "x")]}, "rag": {"args": []}}}),
+            encoding="utf-8",
+        )
+        assert _code_roots(str(tmp_path)) == [str(tmp_path)]
+
+    def test_parser_captures_quoted_php_citation(self):
+        line = '✓ tests/Feature/LoginTest.php::"asks for a code after a correct password"; ✓ tests/x.py::test_a'
+        assert TEST_REF_RE.findall(line) == [
+            'tests/Feature/LoginTest.php::"asks for a code after a correct password"',
+            "tests/x.py::test_a",
+        ]
 
 
 # ------------------------------------------------------------ _project_root ---
