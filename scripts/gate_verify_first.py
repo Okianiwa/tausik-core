@@ -20,7 +20,9 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from gate_block import _block, extract_files_from_gate_output
+from gate_block import _block
+from gate_verify_inline import run_verify_inline
+from security_pattern import is_security_sensitive
 from tausik_utils import cli_invocation
 
 # Spelled for the reader's shell, resolved once per process: `.tausik/tausik`
@@ -177,9 +179,8 @@ def enforce_verify_first(
         in that case we run the verify-trigger gates inline right here.
       - No verify-trigger gates configured (small projects, no pytest
         etc.) →  nothing to wait on, skip enforcement.
-      - Security-sensitive files →  cache always refused, but we still
-        require an explicit verify run; the agent must call `tausik
-        verify` immediately before `task done` to avoid stale greens.
+      - Security-sensitive files →  cache always refused, so the verify
+        gates run fresh inline here, whatever auto_verify says.
 
     `no_file_changes` (qg2-cannot-close-fileless-task) selects the THIRD
     scope state: the caller declares this task touched no files. Unlike the
@@ -205,7 +206,6 @@ def enforce_verify_first(
     from service_verification import (
         DEFAULT_CACHE_TTL_S,
         has_fresh_verify_run,
-        run_gates_with_cache,
     )
 
     try:
@@ -296,6 +296,24 @@ def enforce_verify_first(
         )
         return
 
+    # The cache refuses security-sensitive greens and `tausik verify` mints no
+    # handle for them, so neither route below can ever succeed: run fresh here.
+    if is_security_sensitive(relevant_files):
+        svc.be.task_append_notes(
+            slug,
+            "Verify-First: security-sensitive scope — cached greens are refused, "
+            "running verify gates inline (fresh run).",
+        )
+        run_verify_inline(
+            svc,
+            report,
+            slug,
+            relevant_files,
+            cause="security-sensitive scope",
+            crash_remediation="Fix the failing verify gate, then rerun task_done.",
+        )
+        return
+
     fresh, hit = has_fresh_verify_run(svc.be._conn, slug, relevant_files, max_age_s=ttl)
     if fresh and hit is not None:
         # v15-receipt-check-on-done: a cached green only counts if its
@@ -338,46 +356,16 @@ def enforce_verify_first(
             )
         except Exception:  # noqa: BLE001 — best-effort telemetry, never blocks
             pass
-        try:
-            passed, results, _status = run_gates_with_cache(
-                svc.be._conn,
-                slug,
-                relevant_files,
-                scope=report.get("scope") or "standard",
-                append_notes_fn=svc.be.task_append_notes,
-                trigger="verify",
-                # These gates are running INSIDE a task_done. The run is
-                # recorded under trigger=verify so it shares the cache bucket,
-                # but it must not mint a presentable handle: that would let a
-                # close certify itself, and a close that blocks after this point
-                # would leave a valid hour-long handle behind for a task that
-                # never closed (v2-verify-receipt-as-argument).
-                allow_handle=False,
-            )
-        except Exception as e:  # noqa: BLE001 — best-effort: telemetry/degradation, non-fatal to the main flow
-            _block(
-                report,
-                "verify-first",
-                f"auto_verify run crashed: {e}",
-                "Fix the failing verify gate or set "
-                "config.task_done.auto_verify=false and run `tausik verify` "
-                "manually.",
-            )
-            return
-        if not passed:
-            report["passed"] = False
-            blocking = [r for r in results if not r.get("passed") and r.get("severity") == "block"]
-            report["blocking_failures"].extend(
-                {
-                    "gate": r.get("name"),
-                    "files": extract_files_from_gate_output(r.get("output", "")),
-                    "output": r.get("output", ""),
-                    "remediation": (
-                        "Fix gate issues and rerun task_done. (auto_verify=true caused inline run.)"
-                    ),
-                }
-                for r in blocking
-            )
+        run_verify_inline(
+            svc,
+            report,
+            slug,
+            relevant_files,
+            cause="auto_verify=true",
+            crash_remediation="Fix the failing verify gate or set "
+            "config.task_done.auto_verify=false and run `tausik verify` "
+            "manually.",
+        )
         return
 
     # Default v1.4 behavior: refuse to close.
