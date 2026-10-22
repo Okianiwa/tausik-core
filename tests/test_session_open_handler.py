@@ -133,7 +133,7 @@ class TestEnvelopeProjection:
     BUDGET = 8000
 
     @staticmethod
-    def _fat_self_check(n_modules: int = 120) -> dict:
+    def _fat_self_check(n_modules: int = 120, **_: object) -> dict:
         """A self_check report shaped like a real one: absolute paths + mtimes."""
         paths = {
             f"d:\\Work\\Kibertum\\clients\\kibertum\\tausik\\core\\scripts\\module_{i:03d}.py": (
@@ -276,7 +276,7 @@ class TestEnvelopeProjection:
                 "reason": "edited-after-startup",
             }
         ]
-        monkeypatch.setattr(self_check, "collect", lambda: drifted)
+        monkeypatch.setattr(self_check, "collect", lambda **_: drifted)
         env = json.loads(_handle_tool(seeded, "tausik_session_open", {}))
         stale = env["self_check"]["stale_modules"]
         assert stale[0]["module"] == "handlers.py"
@@ -296,6 +296,37 @@ class TestEnvelopeProjection:
         err = {"error": "self_check timed out after 6s"}
         assert _project(err, ("id", "started_at")) == err
         assert _project_self_check(err) == err
+
+
+class TestSelfCheckSectionBudget:
+    def test_hanging_sibling_probe_keeps_the_drift_verdict(self, seeded, monkeypatch):
+        """Measured 2026-10-22: WMI refused this account in 5.7s, the self_check
+        section timed out at 6s, and /start lost the drift verdict with it."""
+        import threading
+
+        import self_check  # type: ignore[import-not-found]
+
+        release = threading.Event()
+
+        def hanging_enum(pid, project):
+            release.wait(30)
+            return {"count": 0, "pids": [], "error": None}
+
+        monkeypatch.setattr(self_check, "_enumerate_sibling_mcps", hanging_enum)
+        monkeypatch.setattr(self_check, "_SIBLING_ENUM_CACHE", {})
+        monkeypatch.setattr(self_check, "_SIBLING_ENUM_INFLIGHT", {})
+        try:
+            env = json.loads(_handle_tool(seeded, "tausik_session_open", {}))
+        finally:
+            release.set()
+        for thread in list(self_check._SIBLING_ENUM_INFLIGHT.values()):
+            thread.join(5)
+
+        sc = env["self_check"]
+        assert "error" not in sc, sc
+        assert isinstance(sc["drift_detected"], bool)
+        assert sc["sibling_mcp_count"] == -1
+        assert "still running" in sc["sibling_introspection_error"]
 
 
 class TestSchemaRegistration:

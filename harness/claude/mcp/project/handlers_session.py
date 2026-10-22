@@ -141,6 +141,8 @@ _SELF_CHECK_ENVELOPE_KEYS = (
 # `path` is dropped — it is the absolute host path, and the basename in `module`
 # already identifies which module went stale.
 _STALE_MODULE_KEYS = ("module", "reason", "delta_seconds")
+# Seconds session_open waits for the sibling-MCP probe (the section budget is 6).
+_SELF_CHECK_SIBLING_WAIT = 2.0
 
 
 def _project(section: Any, keys: tuple[str, ...]) -> Any:
@@ -208,8 +210,14 @@ def _handle_session_open(svc: Any, args: dict | None = None) -> str:
     if isinstance(tasks, dict) and "error" in tasks and "active" not in tasks:
         tasks = {"active": [], "blocked": [], "error": tasks["error"]}
 
-    # 5. Self-check (re-use existing handler — already serialized).
-    self_check_data = _section_with_timeout("self_check", lambda: json.loads(_handle_self_check()))
+    # 5. Self-check (re-use existing handler — already serialized). The sibling
+    # probe gets a fraction of the section budget: where WMI refuses this account
+    # the refusal alone takes ~5.7s, and the timeout would discard the drift
+    # verdict computed in milliseconds alongside it.
+    self_check_data = _section_with_timeout(
+        "self_check",
+        lambda: json.loads(_handle_self_check(sibling_wait=_SELF_CHECK_SIBLING_WAIT)),
+    )
 
     # 6. Sync suggestion (state-git-triggers): does the tausik/ tree carry state the
     # DB lacks (e.g. after a git pull)? Content-based dry-run; None when there is no

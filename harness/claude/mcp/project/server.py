@@ -95,7 +95,14 @@ def main():
     # loop accepts tool calls. `tausik_self_check` later compares this
     # baseline against current on-disk mtimes to detect stale-module hangs
     # (gotchas #77 / #79 / #80).
-    import self_check  # noqa: F401
+    import self_check
+
+    # Start the sibling-MCP probe now, off the request path: where WMI refuses
+    # this account it takes ~5.7s, and the first /start should find it cached.
+    try:
+        self_check.start_sibling_enumeration()
+    except Exception:  # noqa: BLE001 — a diagnostic must never stop the server booting
+        pass
 
     server = Server("tausik-project")
     svc = _get_service(args.project)

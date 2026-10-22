@@ -456,6 +456,58 @@ def test_enumerate_excludes_parent_pid_venv_launcher(self_check_mod, monkeypatch
     assert out["count"] == 1
 
 
+_WMI_DENIED_STDERR = (
+    "Get-CimInstance : Access denied\n"
+    "    + CategoryInfo          : PermissionDenied: (:) [Get-CimInstance], CimException\n"
+    "    + FullyQualifiedErrorId : HRESULT 0x80041003,"
+    "Microsoft.Management.Infrastructure.CimCmdlets.GetCimInstanceCommand\n"
+)
+
+
+def test_refused_powershell_probe_is_unknown_not_zero(self_check_mod, monkeypatch, tmp_path):
+    """Measured 2026-10-22, Win11 26200, restricted account: WMI refuses the query,
+    PowerShell prints nothing to stdout and exits 1. Parsing that empty stdout
+    reported a clean "0 siblings" for a check that never ran."""
+    import subprocess
+
+    def fake_run(cmd, *args, **kwargs):
+        if cmd[0] == "wmic":
+            raise FileNotFoundError("wmic absent (simulated)")
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=1, stdout="", stderr=_WMI_DENIED_STDERR
+        )
+
+    monkeypatch.setattr(self_check_mod.sys, "platform", "win32")
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    out = self_check_mod._enumerate_sibling_mcps(1, str(tmp_path))
+
+    assert out["count"] == -1
+    assert "exited 1" in out["error"]
+    assert "0x80041003" in out["error"]
+
+
+def test_refused_wmic_probe_is_unknown_not_zero(self_check_mod, monkeypatch, tmp_path):
+    """Same contract where wmic still ships: a non-zero exit is "unknown", not 0."""
+    import subprocess
+
+    def fake_run(cmd, *args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=cmd,
+            returncode=2147749891,
+            stdout="",
+            stderr="ERROR:\nDescription = Access denied\n",
+        )
+
+    monkeypatch.setattr(self_check_mod.sys, "platform", "win32")
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    out = self_check_mod._enumerate_sibling_mcps(1, str(tmp_path))
+
+    assert out["count"] == -1
+    assert out["error"].startswith("wmic exited 2147749891")
+
+
 # --- v2-stale-mcp-reaping: TTL-cached enumeration + report-only warning -------
 
 
@@ -538,3 +590,40 @@ def test_enumeration_exception_degrades_to_unknown(self_check_mod, monkeypatch):
     report = self_check_mod.collect()
     assert report["sibling_mcp_count"] == -1
     assert report["drift_detected"] is False
+
+
+def test_slow_sibling_probe_cannot_hold_collect_past_its_wait(self_check_mod, monkeypatch):
+    """session_open gives self_check 6s; a WMI refusal alone took 5.7s, so the
+    timeout threw away the drift verdict too. With a wait, collect() returns on
+    time and reports the probe as pending; a second call does not start a second
+    probe, and the finished probe fills the cache for the next call."""
+    import threading
+    import time
+
+    _put_scripts_on_path()
+    release = threading.Event()
+    calls = {"n": 0}
+
+    def slow_enum(pid, project):
+        calls["n"] += 1
+        release.wait(10)
+        return {"count": 0, "pids": [], "error": None}
+
+    monkeypatch.setattr(self_check_mod, "_enumerate_sibling_mcps", slow_enum)
+    try:
+        started = time.monotonic()
+        first = self_check_mod.collect(sibling_wait=0.2)
+        elapsed = time.monotonic() - started
+        second = self_check_mod.collect(sibling_wait=0.2)
+    finally:
+        release.set()
+    for thread in list(self_check_mod._SIBLING_ENUM_INFLIGHT.values()):
+        thread.join(5)
+
+    assert elapsed < 2.0
+    assert first["drift_detected"] is False
+    assert first["sibling_mcp_count"] == -1
+    assert "still running" in first["sibling_introspection_error"]
+    assert second["sibling_mcp_count"] == -1
+    assert calls["n"] == 1, "a second probe started while the first was still running"
+    assert self_check_mod.collect(sibling_wait=0.2)["sibling_mcp_count"] == 0

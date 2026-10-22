@@ -211,6 +211,20 @@ def _compute_drift(
     return drift, current
 
 
+def _probe_failure(r: Any, tool: str) -> str | None:
+    """Error text for a probe that exited non-zero, else None.
+
+    A WMI query refused for lack of rights (HRESULT 0x80041003) prints nothing
+    to stdout and exits 1; parsing that empty stdout reported "0 siblings" for
+    a check that never ran.
+    """
+    if r.returncode == 0:
+        return None
+    lines = [ln.strip() for ln in (r.stderr or "").splitlines() if ln.strip()]
+    tail = f": {lines[-1][:160]}" if lines else ""
+    return f"{tool} exited {r.returncode}{tail}"
+
+
 def _enumerate_sibling_mcps(self_pid: int, project_dir: str) -> dict[str, Any]:
     """Best-effort sibling enumeration. Returns `{count, pids, error}`.
 
@@ -260,10 +274,12 @@ def _enumerate_sibling_mcps(self_pid: int, project_dir: str) -> dict[str, Any]:
                 ],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=4,
             )
             wmic_used = True
-            for line in r.stdout.splitlines():
+            err = _probe_failure(r, "wmic")
+            for line in r.stdout.splitlines() if err is None else []:
                 if needle not in line:
                     continue
                 parts = line.rsplit(",", 1)
@@ -295,9 +311,11 @@ def _enumerate_sibling_mcps(self_pid: int, project_dir: str) -> dict[str, Any]:
                     ],
                     capture_output=True,
                     text=True,
+                    errors="replace",
                     timeout=8,
                 )
-                for line in r.stdout.splitlines():
+                err = _probe_failure(r, "powershell Get-CimInstance")
+                for line in r.stdout.splitlines() if err is None else []:
                     if needle not in line:
                         continue
                     raw_pid, _, cmd = line.partition("|")
@@ -371,7 +389,10 @@ def _enumerate_sibling_mcps(self_pid: int, project_dir: str) -> dict[str, Any]:
 # PowerShell Get-CimInstance on modern Windows (wmic is gone from Win11 26200),
 # ~0.6-1s over 100+ processes — paying that on EVERY self_check made /start look
 # like a hang. Memoized per project_dir so repeated checks in a session reuse it.
+# An "unknown" result (count -1) is kept until restart: a WMI refusal takes ~5.7s.
 _SIBLING_ENUM_CACHE: dict[str, tuple[float, Any]] = {}
+# The enumeration thread currently running per project_dir (see mcp_reaper).
+_SIBLING_ENUM_INFLIGHT: dict[str, Any] = {}
 
 
 def _enumerate_sibling_mcps_cached(self_pid: int, project_dir: str) -> dict[str, Any]:
@@ -391,15 +412,55 @@ def _enumerate_sibling_mcps_cached(self_pid: int, project_dir: str) -> dict[str,
         ttl=SIBLING_ENUM_TTL_SECONDS,
         now=time.monotonic(),
         cache=_SIBLING_ENUM_CACHE,
+        sticky=lambda result: result.get("count") == -1,
     )
 
 
-def collect() -> dict[str, Any]:
+def start_sibling_enumeration(project_dir: str | None = None) -> Any:
+    """Start the cached sibling enumeration in the background, or join the running one.
+
+    server.py calls this at startup so the first /start finds the answer cached;
+    `collect()` calls it to wait on that same thread instead of a second probe.
+    """
+    from mcp_reaper import refresh_in_background
+
+    project_dir = project_dir or os.getcwd()
+    self_pid = os.getpid()
+    return refresh_in_background(
+        os.path.normpath(project_dir),
+        lambda: _enumerate_sibling_mcps_cached(self_pid, project_dir),
+        inflight=_SIBLING_ENUM_INFLIGHT,
+    )
+
+
+def _enumerate_sibling_mcps_bounded(project_dir: str, wait: float | None) -> dict[str, Any]:
+    """Cached enumeration that blocks the caller at most `wait` seconds (None: until done).
+
+    A probe still running past `wait` keeps going in its thread and fills the
+    cache for the next call; this call reports the check as not yet available.
+    """
+    thread = start_sibling_enumeration(project_dir)
+    thread.join(wait)
+    entry = _SIBLING_ENUM_CACHE.get(os.path.normpath(project_dir))
+    if entry is not None and not thread.is_alive():
+        return entry[1]
+    if thread.is_alive():
+        err = f"sibling enumeration still running after {wait:g}s"
+    else:
+        err = "sibling enumeration finished without a result"
+    return {"count": -1, "pids": [], "error": err}
+
+
+def collect(sibling_wait: float | None = None) -> dict[str, Any]:
     """Return diagnostic snapshot for `tausik_self_check`.
 
     `drift_detected` is the headline signal — when True, the running MCP
     server is executing stale Python bytecode and the user should restart
     the IDE before running heavy tools (`tausik_verify`, `tausik_task_done`).
+
+    `sibling_wait` caps how long the sibling enumeration may hold this call.
+    session_open passes one so a slow probe cannot cost /start the drift
+    verdict; None (the explicit `tausik_self_check`) waits for the probe.
     """
     # Ask the producer for the live watch set, then run the pure drift core.
     # Wrapped defensively: any failure here must degrade to "no drift found",
@@ -416,7 +477,7 @@ def collect() -> dict[str, Any]:
     # crash the MCP server on a tool call, so any failure in the (cached)
     # enumeration degrades to "unknown" (count == -1), not an exception (AC5).
     try:
-        siblings = _enumerate_sibling_mcps_cached(os.getpid(), project_dir)
+        siblings = _enumerate_sibling_mcps_bounded(project_dir, sibling_wait)
     except Exception:  # noqa: BLE001 — enumeration failure → "unknown", never crash
         siblings = {"count": -1, "pids": [], "error": "sibling enumeration raised"}
     sibling_count = siblings["count"]

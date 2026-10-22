@@ -34,12 +34,14 @@ def _handle_health(svc: Any) -> str:
         return json.dumps({"status": "error", "error": str(e)})
 
 
-def _handle_self_check() -> str:
+def _handle_self_check(sibling_wait: float | None = None) -> str:
     """v14b-mcp-stale-module-detector — return MCP-server freshness report."""
     try:
         import self_check  # type: ignore[import-not-found]
 
-        return json.dumps(self_check.collect(), ensure_ascii=False, default=str)
+        return json.dumps(
+            self_check.collect(sibling_wait=sibling_wait), ensure_ascii=False, default=str
+        )
     except Exception as e:  # noqa: BLE001 — best-effort: MCP handler must not crash the server on a tool call
         return json.dumps(
             {

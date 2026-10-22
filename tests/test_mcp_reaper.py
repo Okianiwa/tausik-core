@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 from mcp_reaper import (  # noqa: E402
     SIBLING_WARN_THRESHOLD,
     cached_enumerate,
+    refresh_in_background,
     sibling_warning,
 )
 
@@ -107,4 +109,70 @@ class TestCachedEnumerate:
         a = cached_enumerate("projA", enum, ttl=30.0, now=100.0, cache=cache)
         b = cached_enumerate("projB", enum, ttl=30.0, now=100.0, cache=cache)
         assert a != b  # different keys → separate enumerations
+        assert calls["n"] == 2
+
+    @staticmethod
+    def _unknown(value: dict) -> bool:
+        return value["count"] == -1
+
+    def test_sticky_value_outlives_ttl(self):
+        # A refused probe (WMI denied: ~5.7s) is not re-paid when the window expires.
+        calls = {"n": 0}
+
+        def enum():
+            calls["n"] += 1
+            return {"count": -1}
+
+        cache: dict = {}
+        cached_enumerate("proj", enum, ttl=30.0, now=100.0, cache=cache, sticky=self._unknown)
+        cached_enumerate("proj", enum, ttl=30.0, now=1000.0, cache=cache, sticky=self._unknown)
+        assert calls["n"] == 1
+
+    def test_non_sticky_value_still_expires(self):
+        calls = {"n": 0}
+
+        def enum():
+            calls["n"] += 1
+            return {"count": 0}
+
+        cache: dict = {}
+        cached_enumerate("proj", enum, ttl=30.0, now=100.0, cache=cache, sticky=self._unknown)
+        cached_enumerate("proj", enum, ttl=30.0, now=131.0, cache=cache, sticky=self._unknown)
+        assert calls["n"] == 2
+
+
+class TestRefreshInBackground:
+    """A slow probe runs once, off the caller's thread, however many callers wait on it."""
+
+    def test_callers_during_a_run_share_one_thread(self):
+        release = threading.Event()
+        calls = {"n": 0}
+
+        def probe():
+            calls["n"] += 1
+            release.wait(5)
+
+        inflight: dict = {}
+        try:
+            first = refresh_in_background("proj", probe, inflight=inflight)
+            second = refresh_in_background("proj", probe, inflight=inflight)
+            assert first is second
+        finally:
+            release.set()
+        first.join(5)
+        assert not first.is_alive()
+        assert calls["n"] == 1
+
+    def test_finished_run_is_replaced_by_a_new_one(self):
+        calls = {"n": 0}
+
+        def probe():
+            calls["n"] += 1
+
+        inflight: dict = {}
+        first = refresh_in_background("proj", probe, inflight=inflight)
+        first.join(5)
+        second = refresh_in_background("proj", probe, inflight=inflight)
+        second.join(5)
+        assert first is not second
         assert calls["n"] == 2
