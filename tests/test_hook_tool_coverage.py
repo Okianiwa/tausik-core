@@ -258,11 +258,10 @@ def test_edited_file_path_reads_each_tools_field(tmp_path, monkeypatch):
     on paper only: the guard matches, finds nothing, and exits 0.
     """
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
-    # normpath because the hooks normalise separators — compare the same way
-    # rather than assuming POSIX slashes on a Windows host.
-    assert edited_file_path({"file_path": "/abs/a.py"}) == os.path.normpath("/abs/a.py")
-    assert edited_file_path({"notebook_path": "/abs/b.ipynb"}) == os.path.normpath("/abs/b.ipynb")
-    assert edited_file_path({"path": "/abs/c.txt"}) == os.path.normpath("/abs/c.txt")
+    # Not "/abs/...": on Windows (Python 3.13+) a path without a drive is relative.
+    for field, name in (("file_path", "a.py"), ("notebook_path", "b.ipynb"), ("path", "c.txt")):
+        target = str(tmp_path / "abs" / name)
+        assert edited_file_path({field: target}) == os.path.normpath(target)
     # serena speaks relative_path, resolved against the project dir.
     resolved = edited_file_path({"relative_path": "pkg/mod.py"})
     assert resolved == os.path.normpath(os.path.join(str(tmp_path), "pkg/mod.py"))
@@ -300,12 +299,13 @@ def test_relative_path_cannot_climb_out_unnoticed(tmp_path, monkeypatch):
     assert escaped == os.path.normpath(str(tmp_path / "outside" / "secrets.md"))
 
 
-def test_filesystem_move_exposes_the_destination():
+def test_filesystem_move_exposes_the_destination(tmp_path):
     """move/copy write to `destination`; checking only `path` inspects the source."""
+    target = str(tmp_path / "guarded" / "target.md")
     paths = edited_file_paths(
-        {"mode": "move", "path": "/tmp/staged.md", "destination": "/guarded/target.md"}
+        {"mode": "move", "path": str(tmp_path / "staged.md"), "destination": target}
     )
-    assert os.path.normpath("/guarded/target.md") in paths
+    assert os.path.normpath(target) in paths
 
 
 def test_db_timeout_budget_fits_the_hook_timeout():
